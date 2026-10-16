@@ -107,6 +107,29 @@ repos:
         files: ^\.github/workflows/
         pass_filenames: false
 
+      # Formatting checks for the languages with code in this repo. They fail
+      # without rewriting; the fix-go and format-py tasks rewrite.
+      - id: go-fmt
+        name: go format check
+        entry: mise run lint-go-fmt
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format check
+        entry: mise run lint-ruff-format
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: ruff
+        name: ruff
+        entry: mise run lint-ruff
+        language: system
+        types: [python]
+        pass_filenames: false
+
       # apm.lock.yaml records no hook declarations, so it stays identical
       # across a bad hook merge; watch the manifest and the settings files
       # instead.
@@ -139,3 +162,22 @@ repos:
         language: system
         files: ^(apm\.yml|vendir\.yml|\.pre-commit-config\.yaml|\.github/renovate\.json5|\.github/workflows/.*)$
         pass_filenames: false
+
+      # The leak check, at two stages. Staged scans the index blobs, so a
+      # private value cannot hide behind a cleaned working file. The message
+      # file arrives as the hook's argument. The pre-push stage isn't here:
+      # prek hides git's ref lines, so tools/install-pre-push.sh puts the
+      # check in front of prek's pre-push hook instead.
+      - id: leaks-staged
+        name: leak check (staged files)
+        entry: mise run lint-leaks -- --staged
+        language: system
+        stages: [pre-commit]
+        always_run: true
+        pass_filenames: false
+
+      - id: leaks-commit-msg
+        name: leak check (commit message)
+        entry: mise run lint-leaks --
+        language: system
+        stages: [commit-msg]

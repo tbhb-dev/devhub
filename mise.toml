@@ -45,6 +45,7 @@ run = [
   "mise run install-tools",
   "mise run install-guard-markdown",
   "mise run devtools:prek-install",
+  "mise run install-pre-push",
 ]
 
 [tasks.install-toolchain]
@@ -75,6 +76,22 @@ esac
 [tasks.check-vendored]
 description = "Fail when the vendored payload differs from what vendir.lock.yml pins, without touching the checkout"
 run = "bash tools/check-vendored.sh"
+
+# Arguments pass through to the script: `mise run lint-leaks -- --staged`.
+# With none it scans the working tree.
+# quiet keeps mise from echoing the arguments, which can be private filenames.
+[tasks.lint-leaks]
+description = "Fail when a file carries a private value or a private-network or credential pattern"
+quiet = true
+run = "bash tools/check-leaks.sh"
+
+[tasks.install-pre-push]
+description = "Put the leak check in front of prek's pre-push hook"
+run = "bash tools/install-pre-push.sh"
+
+[tasks.lint-hooks]
+description = "Fail locally when the leak-check pre-push hook isn't installed"
+run = "bash tools/install-pre-push.sh --check"
 
 # APM merges hook declarations into each harness's settings additively and
 # never reconciles, while `apm audit --ci` replays the same merge from an
@@ -132,6 +149,7 @@ run = [
   "bash .claude/skills/pr/scripts/validate-description.sh",
   "vale --output=ai-tells-agent.tmpl PR_AGENTDESC.md",
   "cspell --config .cspell.jsonc --no-summary --no-progress PR_AGENTDESC.md",
+  "bash tools/check-leaks.sh PR_AGENTDESC.md",
 ]
 
 # Both draft tasks are scoped to the one file they receive. The fix-prose
@@ -149,7 +167,7 @@ run = 'uv run --script tools/fix_prose_replacements.py "$usage_file"'
 # prose, so the harness skill and rule trees are excluded.
 [tasks.lint-prose]
 extends = "devtools:lint-prose"
-run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,node_modules/*,.nx/*,.venv/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
+run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,node_modules/*,.nx/*,.venv/*,.pytest_cache/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
 
 [tasks.lint-markdown-wrap]
 description = "Fail if any Markdown paragraph spans more than one line"
@@ -184,6 +202,8 @@ files=$(git ls-files --cached --others --exclude-standard -- '*.sh' ':!:vendor/*
 extends = "devtools:lint"
 run = [
   "mise run check-vendored",
+  "mise run lint-leaks",
+  "mise run lint-hooks",
   "mise run devtools:check-pins",
   "mise run lint-apm",
   "mise run lint-apm-deploy",
@@ -207,6 +227,10 @@ run = [
 description = "Test the vendored-payload drift gate on a copy of the tree"
 run = "bats tools/check-vendored.bats"
 
+[tasks.test-leaks]
+description = "Test the leak check against throwaway repositories"
+run = "bats tools/check-leaks.bats"
+
 [tasks.test-tools]
 description = "Test the devtools pin parser and the prose fixer's failure handling"
 run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats"
@@ -216,8 +240,10 @@ description = "Run every test suite"
 run = [
   "mise run test-vendored",
   "mise run test-tools",
+  "mise run test-leaks",
   "mise run test-go",
   "mise run cover-go",
+  "mise run test-py",
 ]
 
 [tasks.check]
@@ -279,6 +305,11 @@ run = [
 [tasks.lint-go]
 description = "Run Go linters via golangci-lint (vendor-mode)"
 run = "golangci-lint run --modules-download-mode=vendor"
+
+# The check counterpart of format-go: prints the diff and fails, and writes nothing.
+[tasks.lint-go-fmt]
+description = "Fail if golangci-lint's formatters would change any Go file"
+run = "golangci-lint fmt --diff ./cmd/... ./internal/..."
 
 # The compiler covers cycles and cross-module visibility; this catches
 # the layer rules it can't (e.g., "cmd may depend on internal but not
@@ -570,6 +601,24 @@ run = "bash tools/lint-types.sh"
 [tasks.lint-py-all]
 description = "Aggregate every Python-flavored lint gate"
 run = ["mise run lint-ruff-format", "mise run lint-ruff", "mise run lint-types"]
+
+# Serial by default so a failing run prints a clean, ordered trace; pass
+# `mise run test-py -n auto` to fan the suite across xdist workers. pytest
+# exits 5 when it collects nothing, which is the state until the first app or
+# package lands; that passes here, and any other nonzero exit still fails.
+[tasks.test-py]
+description = "Run the Python tests; collecting no tests passes until a suite exists"
+run = '''
+#!/usr/bin/env bash
+set -uo pipefail
+uv run pytest "$@"
+rc=$?
+if [[ $rc -eq 5 ]]; then
+  echo "test-py: no Python tests collected yet"
+  exit 0
+fi
+exit "$rc"
+'''
 
 # Contributors run `uv lock` and commit the result.
 [tasks.lock-check]

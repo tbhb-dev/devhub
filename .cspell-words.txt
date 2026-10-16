@@ -4,6 +4,7 @@ GOPATH
 PYTHONUTF
 addopts
 argparse
+autobuild
 autostash
 buildid
 buildmeta
@@ -28,6 +29,7 @@ gochecknoinits
 gocover
 gocoverdir
 golangci
+gomod
 gomodscan
 goreleaser
 govulncheck
@@ -56,6 +58,7 @@ shfmt
 singledispatch
 slotsdir
 stretchr
+tailnet
 tbhb
 testcoverage
 testdata
@@ -70,3 +73,4 @@ vendir
 venv
 worktree
 worktrees
+xdist

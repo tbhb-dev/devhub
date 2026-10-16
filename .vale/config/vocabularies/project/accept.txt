@@ -24,3 +24,8 @@ subcommands?
 configs?
 buildmeta
 ldflags
+uv
+repos?
+pyrefly
+pytest
+ruff

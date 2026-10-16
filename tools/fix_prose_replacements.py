@@ -150,7 +150,7 @@ def findings(path: Path, cwd: Path) -> tuple[int, list[str], str]:
 
 
 def parse(lines: list[str], path: Path) -> tuple[list[Edit], int]:
-    """Return the edits carrying a replacement and the count of forms that will not parse."""
+    """Return the edits carrying a replacement and the unparsable-form count."""
     edits = []
     unparsable = 0
     for raw in lines:
@@ -236,7 +236,9 @@ def main(argv: list[str]) -> int:
 
     status, report, stderr = findings(path, repo_root())
     if status not in (0, 1):
-        sys.stderr.write(f"{path}:1 [error] vale-failed  vale exited {status}: {stderr.strip()}\n")
+        sys.stderr.write(
+            f"{path}:1 [error] vale-failed  vale exited {status}: {stderr.strip()}\n"
+        )
         return 1
     if not report:
         return 0

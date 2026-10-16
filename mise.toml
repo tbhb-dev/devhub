@@ -147,7 +147,7 @@ run = 'uv run --script tools/fix_prose_replacements.py "$usage_file"'
 # prose, so the harness skill and rule trees are excluded.
 [tasks.lint-prose]
 extends = "devtools:lint-prose"
-run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
+run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,node_modules/*,.nx/*,.venv/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
 
 [tasks.lint-markdown-wrap]
 description = "Fail if any Markdown paragraph spans more than one line"
@@ -186,6 +186,8 @@ run = [
   "mise run lint-apm",
   "mise run lint-apm-deploy",
   "mise run lint-go-all",
+  "mise run lint-py-all",
+  "mise run lock-check",
   "mise run lint-prose",
   "mise run devtools:lint-spelling",
   "mise run devtools:lint-markdown",
@@ -526,3 +528,62 @@ run = [
   "mise run lint-go-deadcode",
   "mise run lint-go-arch",
 ]
+
+# --- Python tasks, copied from devtools/mise.toml (upstream candidate: tbhb-dev/devtools#157) ---
+# Only the gates that apply to a repo with scripts and no packages yet.
+# complexipy, vulture, pylint duplicate detection, bandit, and the mutation
+# and fuzz tasks wait until there is Python code worth measuring. test-py and
+# cover-py wait too: pytest exits non-zero when it collects nothing, and
+# tools/*.py has no pytest suite (the bats suites cover the tool scripts).
+
+[tasks.format-py]
+description = "Format Python code in place via ruff's formatter"
+run = "uv run ruff format"
+
+# Pair with format-py, which handles layout rather than lint.
+[tasks.fix-py]
+description = "Fix Python linting issues"
+run = "uv run ruff check --fix"
+
+# Report drift and fail without rewriting; format-py is the in-place
+# counterpart.
+[tasks.lint-ruff-format]
+description = "Check Python formatting via ruff's formatter in --check mode"
+run = "uv run ruff format --check"
+
+# Rule selection and the justified ignore list live in pyproject.toml
+# under [tool.ruff].
+[tasks.lint-ruff]
+description = "Lint Python against the full ruff ruleset"
+run = "uv run ruff check"
+
+# The [tool.pyrefly] tables in pyproject.toml pin every error kind and
+# name the project scope. The wrapper exists for agent worktrees, where
+# pyrefly's hidden-path skipping leaves it an empty view; see the script
+# header.
+[tasks.lint-types]
+description = "Type check with pyrefly"
+run = "bash tools/lint-types.sh"
+
+[tasks.lint-py-all]
+description = "Aggregate every Python-flavored lint gate"
+run = ["mise run lint-ruff-format", "mise run lint-ruff", "mise run lint-types"]
+
+# Contributors run `uv lock` and commit the result.
+[tasks.lock-check]
+description = "Check that uv.lock is in sync with pyproject.toml"
+run = "uv lock --check"
+
+# uv exports the locked set to a throwaway pylock.toml, and pip-audit reads
+# that and nothing else, so the audit never reaches the live environment.
+# The scratch directory, cache included, disappears on exit.
+[tasks.audit]
+description = "Audit the locked Python dependencies against the advisory database"
+run = '''
+#!/usr/bin/env bash
+set -eu
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+uv export --quiet --format pylock.toml --no-emit-project -o "$work/pylock.toml"
+uv run pip-audit --cache-dir "$work/cache" --locked "$work"
+'''

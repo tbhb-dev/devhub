@@ -17,7 +17,7 @@ mise pins the tools and defines the tasks. The shared half arrives from `tbhb-de
 - `mise run lint` runs every lint gate in order.
 - `mise run test` runs the test suites.
 - `mise run check` runs both.
-- `mise run devtools:update-pins <version>` moves every devtools pin together. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`.
+- `mise run devtools:update-pins <version>` moves every devtools pin together, except one. Because tbhb-dev/devtools#156 has no fix yet, `update-pins` and `check-pins` skip the `renovate-go-config.json5` line in `.github/renovate.json5`, so after a bump move it by hand to the same commit hash and `// vX.Y.Z` comment as the preceding line. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`.
 
 The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Claude write hook. `mise run bootstrap` installs it through `mise run install-guard-markdown`, which takes the version from the devtools pin in `apm.yml`. A pin bump moves it too. Keep the Go bin directory on PATH.
 

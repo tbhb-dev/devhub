@@ -100,7 +100,7 @@ jobs:
           mise run test-tools
           mise run test-leaks
 
-  test:
+  test-matrix:
     name: "test (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
@@ -141,6 +141,24 @@ jobs:
         env:
           MISE_TASK_RUN_AUTO_INSTALL: "0"
         run: mise run test-go-race
+
+  # The matrix job reports as `test (ubuntu-24.04)` and `test (macos-15)`.
+  # This job owns the plain name `test`, so the required-check list names
+  # one check and stays stable when the matrix changes.
+  test:
+    name: test
+    if: always()
+    needs: test-matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every matrix leg to pass
+        env:
+          RESULT: ${{ needs.test-matrix.result }}
+        run: |
+          if [[ "${RESULT}" != "success" ]]; then
+            echo "the test matrix finished as ${RESULT}" >&2
+            exit 1
+          fi
 
   # The Python suite is empty until the first app or package lands. test-py
   # passes while pytest collects nothing and fails on any real failure; the

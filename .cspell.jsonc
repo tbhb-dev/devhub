@@ -16,6 +16,10 @@
     ".rumdl_cache/**/*",
     ".vale/**/*",
     "apm.lock.yaml",
+    // Vendored Go modules and their checksums are upstream's text.
+    "go.mod",
+    "go.sum",
+    "vendor/**/*",
     "mise.lock",
     // Private values, gitignored; nothing in it belongs in a dictionary.
     "mise.local.toml",

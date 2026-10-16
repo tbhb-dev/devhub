@@ -16,3 +16,11 @@ rulesets?
 [Dd]evhub
 monorepo
 nx
+devhubctl
+govulncheck
+deadcode
+gomodscan
+subcommands?
+configs?
+buildmeta
+ldflags

@@ -1,6 +1,10 @@
 ---
 default_stages: [pre-commit, pre-push]
 
+# Hooks never touch vendored third-party code; that source is reviewed at PR
+# time as part of vendor-check, not reformatted to match this repo's style.
+exclude: ^(vendor/|bin/|dist/)
+
 # Every hook that runs a project tool goes through `mise run <task>`, so
 # the hook and the `mise run` gate execute the same pinned binary. The
 # devtools block keeps its own `rev:`, pinned by SHA with a `# frozen:`

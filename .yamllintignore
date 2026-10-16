@@ -3,3 +3,4 @@ vendir.lock.yml
 .worktrees/
 .claude/worktrees/
 .codex/worktrees/
+vendor/

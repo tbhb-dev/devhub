@@ -154,7 +154,7 @@ description = "Fail if any Markdown paragraph spans more than one line"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-files=$(git ls-files '*.md' ':!:CHANGELOG.md')
+files=$(git ls-files '*.md' ':!:CHANGELOG.md' ':!:vendor/**')
 if [[ -n $files ]]; then guard-markdown $files; fi
 '''
 

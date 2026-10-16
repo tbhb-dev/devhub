@@ -545,7 +545,8 @@ run = '''
 set -euo pipefail
 go mod tidy
 go mod vendor
-if ! git diff --exit-code -- go.mod go.sum vendor/; then
+untracked=$(git ls-files --others --exclude-standard -- go.mod go.sum vendor/)
+if [[ -n $untracked ]] || ! git diff --exit-code -- go.mod go.sum vendor/; then
     echo "vendor drift detected — run 'mise run vendor' and commit" >&2
     exit 1
 fi

@@ -4,7 +4,7 @@ tmp/
 # Build output and test artifacts
 bin/
 dist/
-coverage/
+/coverage/
 coverage.out
 coverage.txt
 *.coverprofile

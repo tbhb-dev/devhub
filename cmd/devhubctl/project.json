@@ -51,7 +51,7 @@
       ],
       "options": {
         "cwd": "{workspaceRoot}",
-        "command": "golangci-lint run --modules-download-mode=vendor ./cmd/devhubctl/..."
+        "command": "golangci-lint run --modules-download-mode=vendor ./cmd/devhubctl/... ./internal/..."
       }
     }
   }

@@ -62,7 +62,7 @@
 # typed into GitHub.
 #
 # Exit status: 0 clean, 1 findings, 2 misuse, or a git or read failure.
-# cspell:ignore objs toread gsub nwant ngot lref loid rref roid getline tolower RSTART RLENGTH ACMRT quotepath gitlinks sprintf objecttype objectname AKIA ASIA AGPA AIDA AROA AIPA ANPA ANVA ABIA ACCA Hetzner mawk
+# cspell:ignore tokskip tokexempt objs toread gsub nwant ngot lref loid rref roid getline tolower RSTART RLENGTH ACMRT quotepath gitlinks sprintf objecttype objectname AKIA ASIA AGPA AIDA AROA AIPA ANPA ANVA ABIA ACCA Hetzner mawk
 set -euo pipefail
 export LC_ALL=C
 
@@ -74,9 +74,12 @@ exec 3>&2
 git() { command git "$@" 2>/dev/null; }
 
 # Rule set 2 skips these paths: vendored and deployed trees answer to
-# their upstream, lockfiles are full of hashes and registry URLs, and the
-# checker's own files spell out the patterns. Rule set 1 still reads them.
-pattern_exempt='^(\.claude/|\.agents/|\.codex/|\.devtools/|\.config/mise/conf\.d/|\.vale/|vendor/|node_modules/|apm_modules/|tools/check-leaks\.(sh|bats)$|(.*/)?(pnpm-lock\.yaml|package-lock\.json|uv\.lock|go\.sum|mise\.lock|apm\.lock\.yaml|vendir\.lock\.yml)$)'
+# their upstream, and the checker's own files spell out the patterns. Rule
+# set 1 still reads them.
+pattern_exempt='^(\.claude/|\.agents/|\.devtools/|\.config/mise/conf\.d/|\.vale/|vendor/|node_modules/|apm_modules/|tools/check-leaks\.(sh|bats)$)'
+# Lockfiles are full of hashes, so only the token-shape rule skips them. The
+# host, address, password-manager and PEM rules still read them.
+token_exempt='(^|/)(pnpm-lock\.yaml|package-lock\.json|uv\.lock|go\.sum|mise\.lock|apm\.lock\.yaml|vendir\.lock\.yml)$'
 
 finished=
 die() {
@@ -147,7 +150,7 @@ fi
 # starting with \002 is a path to scan as text of its own, and every other
 # record is "<line number or "binary"><TAB><text>".
 scan() {
-  PATTERN_EXEMPT=$pattern_exempt NEEDLES=$needles awk '
+  PATTERN_EXEMPT=$pattern_exempt TOKEN_EXEMPT=$token_exempt NEEDLES=$needles awk '
     BEGIN {
       nf = ENVIRON["NEEDLES"]
       while ((r = (getline l < nf)) > 0) {
@@ -161,6 +164,7 @@ scan() {
       if (r < 0) unreadable = 1
       close(nf)
       exempt = ENVIRON["PATTERN_EXEMPT"]
+      tokexempt = ENVIRON["TOKEN_EXEMPT"]
       for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i
       # Split so a search for the literal finds only real uses of it.
       op_ref = "op:" "//"
@@ -239,14 +243,14 @@ scan() {
       if (foreign_ts(low)) report("pattern: tailnet host name")
       if (low ~ re_tailnet || index(low, "fd7a:115c:a1e0")) report("pattern: tailnet address")
       if (low ~ re_ip) report("pattern: private IPv4 address")
-      if (hetzner_token(orig)) report("pattern: Hetzner Cloud API token shape")
+      if (!tokskip && hetzner_token(orig)) report("pattern: Hetzner Cloud API token shape")
       if (aws_key(orig)) report("pattern: AWS access key ID")
       if (low ~ re_gcp_type || index(low, re_gcp_key)) report("pattern: GCP service-account key marker")
       if (low ~ re_pem) report("pattern: private key PEM header")
     }
     # Name a location: as given, unless the name itself matches a rule.
     function locate(full,    n) {
-      quiet = 1; hits = 0
+      quiet = 1; hits = 0; tokskip = 0
       # Exemptions silence findings, never the sanitizing of a location.
       check("/" full, 0)
       quiet = 0
@@ -255,11 +259,12 @@ scan() {
     # With the private values unread, say nothing: any finding or location
     # would come from an incomplete set, and the END rule reports the failure.
     unreadable { next }
-    /^\001/ { full = substr($0, 2); label = locate(full); skip = (full ~ exempt); next }
+    /^\001/ { full = substr($0, 2); label = locate(full); skip = (full ~ exempt); tokskip = (full ~ tokexempt); next }
     /^\002/ {
       full = substr($0, 2)
       label = locate(full)
       lineno = "path"
+      tokskip = (full ~ tokexempt)
       # The leading slash lets the path patterns see a top-level directory.
       check("/" full, (full ~ exempt))
       next
@@ -411,7 +416,7 @@ emit_objects() {
   # refused by the type check above, and one that vanishes since leaves a
   # header unseen, which the count catches. A body can't forge a pass,
   # since every line is scanned whichever object it is credited to.
-  tr '\0' '\n' <"$tmp/batch" | PAIRS=$tmp/pairs NAMES=$tmp/uniq TYPES=$tmp/types PATTERN_EXEMPT=$pattern_exempt awk '
+  tr '\0' '\n' <"$tmp/batch" | PAIRS=$tmp/pairs NAMES=$tmp/uniq TYPES=$tmp/types PATTERN_EXEMPT=$pattern_exempt TOKEN_EXEMPT=$token_exempt awk '
     function load(file, kind,    r, l, sp, p, o) {
       while ((r = (getline l < file)) > 0) {
         if (kind == "types") { split(l, f, " "); want[f[1]] = f[2]; nwant++; continue }
@@ -419,14 +424,17 @@ emit_objects() {
         if (!sp) continue
         o = substr(l, 1, sp - 1)
         p = substr(l, sp + 1)
-        # Prefer a path that is not exempt, so patterns run if any use is.
-        if (!(o in chosen) || (chosen[o] ~ exempt && p !~ exempt)) chosen[o] = p
+        # Prefer a path that is not exempt from any rule, so every pattern
+        # runs if any use of the object allows it.
+        if (!(o in chosen) || (skipped(chosen[o]) && !skipped(p))) chosen[o] = p
       }
       if (r < 0) bad = 1
       close(file)
     }
+    function skipped(p) { return p ~ exempt || p ~ tokexempt }
     BEGIN {
       exempt = ENVIRON["PATTERN_EXEMPT"]
+      tokexempt = ENVIRON["TOKEN_EXEMPT"]
       load(ENVIRON["TYPES"], "types")
       load(ENVIRON["PAIRS"], "paths")
       load(ENVIRON["NAMES"], "paths")

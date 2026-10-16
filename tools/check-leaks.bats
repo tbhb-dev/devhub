@@ -626,7 +626,7 @@ run_check() {
   [ "$status" -eq 0 ]
 }
 
-@test "lockfiles, vendor and node_modules are exempt from patterns but not from literals" {
+@test "vendor and node_modules are exempt from patterns, lockfiles from the token rule only, and none from literals when staged" {
   local token key dir
   token=$(printf 'aB3%.0s' {1..21})Z
   key=AKIA$(printf 'Z%.0s' {1..16})
@@ -635,7 +635,7 @@ run_check() {
     printf '%s\n' "$token" "$key" "gw 10.1.2.3" >"$dir/f.txt"
   done
   for dir in pnpm-lock.yaml uv.lock go.sum mise.lock sub/pnpm-lock.yaml; do
-    printf '%s\n' "$token" "$key" >"$dir"
+    printf '%s\n' "$token" >"$dir"
   done
   git add -f vendor node_modules pnpm-lock.yaml uv.lock go.sum mise.lock sub
   run_check --staged
@@ -650,6 +650,29 @@ run_check() {
   run_check --staged
   [ "$status" -eq 1 ]
   [[ $output == *"uv.lock:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
+}
+
+@test "lockfiles skip only the token rule, so a ts.net host or private IP in one is found" {
+  local token key
+  token=$(printf 'aB3%.0s' {1..21})Z
+  key=AKIA$(printf 'Z%.0s' {1..16})
+  printf '%s\n' "$token" "registry foo.ts.net" "gw 10.1.2.3" "$key" >pnpm-lock.yaml
+  git add pnpm-lock.yaml
+  run_check --staged
+  [ "$status" -eq 1 ]
+  [[ $output == *"pnpm-lock.yaml:2: pattern: tailnet host name"* ]]
+  [[ $output == *"pnpm-lock.yaml:3: pattern: private IPv4 address"* ]]
+  [[ $output == *"pnpm-lock.yaml:4: pattern: AWS access key ID"* ]]
+  [[ $output != *"pnpm-lock.yaml:1:"* ]]
+}
+
+@test "a tailnet host in .codex/config.toml is found, since the file is repo-authored" {
+  mkdir -p .codex
+  echo 'domains = ["foo.ts.net"]' >.codex/config.toml
+  git add .codex/config.toml
+  run_check --staged
+  [ "$status" -eq 1 ]
+  [[ $output == *".codex/config.toml:1: pattern: tailnet host name"* ]]
 }
 
 @test "AWS key IDs need the exact shape, and the documentation example passes" {

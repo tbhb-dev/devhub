@@ -545,7 +545,8 @@ run = '''
 set -euo pipefail
 go mod tidy
 go mod vendor
-untracked=$(git ls-files --others --exclude-standard -- go.mod go.sum vendor/)
+# Use repository rules so personal Git ignores cannot hide vendor drift.
+untracked=$(git ls-files --others --exclude-per-directory=.gitignore -- go.mod go.sum vendor/)
 if [[ -n $untracked ]] || ! git diff --exit-code -- go.mod go.sum vendor/; then
     echo "vendor drift detected — run 'mise run vendor' and commit" >&2
     exit 1

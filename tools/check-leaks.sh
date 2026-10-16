@@ -170,7 +170,10 @@ scan() {
       op_ref = "op:" "//"
       oct = "(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])"
       dot = "\\."
-      pre = "(^|[^0-9.])"
+      # A dot after a letter or hyphen ends a host name label (nip.io style names),
+      # so an address after it still counts; a digit before the dot (a version
+      # string) does not.
+      pre = "(^|[^0-9.]|[A-Za-z-]\\.)"
       ip10 = "10" dot oct dot oct dot oct
       ip172 = "172" dot "(1[6-9]|2[0-9]|3[01])" dot oct dot oct
       ip192 = "192" dot "168" dot oct dot oct

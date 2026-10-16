@@ -675,6 +675,16 @@ run_check() {
   [[ $output == *".codex/config.toml:1: pattern: tailnet host name"* ]]
 }
 
+@test "a private address after a host name label is found, a version string is not" {
+  printf '%s\n' "app.10.0.0.5.nip.io" >leak.md
+  printf '%s\n' "go1.10.0.0.5" "v2.10.0.0.5" >ok.md
+  git add leak.md ok.md
+  run_check --staged
+  [ "$status" -eq 1 ]
+  [[ $output == *"leak.md:1: pattern: private IPv4 address"* ]]
+  [[ $output != *"ok.md"* ]]
+}
+
 @test "AWS key IDs need the exact shape, and the documentation example passes" {
   local key
   key=AKIA$(printf 'Z%.0s' {1..16})

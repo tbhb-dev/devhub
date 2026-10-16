@@ -92,7 +92,9 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: mise run lint-leaks -- --range "${BASE_SHA}..HEAD"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Scan source commits rather than GitHub's synthetic merge signature.
+        run: mise run lint-leaks -- --range "${BASE_SHA}..${HEAD_SHA}"
 
       - name: Test the shell tools
         run: |

@@ -4,3 +4,7 @@ vendir.lock.yml
 .claude/worktrees/
 .codex/worktrees/
 vendor/
+pnpm-lock.yaml
+node_modules/
+.nx/
+.venv/

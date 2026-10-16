@@ -16,6 +16,8 @@ shfmt = "3.14.1"
 jq = "1.8.2"
 # Runs tools/apm_audit.py, the one Python file this repo needs.
 uv = "0.12.23"
+# JS/TS workspace package manager; package.json packageManager names the same version.
+pnpm = "12.8.2"
 
 [env]
 DEVTOOLS_LOCK_PLATFORMS = "linux-x64,macos-arm64"
@@ -252,7 +254,7 @@ go run -ldflags "$(bash tools/go-ldflags.sh)" "./cmd/$bin" "$@"
 
 [tasks.clean]
 description = "Clean build artifacts"
-run = "rm -rf bin dist coverage.out coverage.html coverage.txt coverage.xml coverage.covdata*"
+run = "rm -rf bin dist .nx/cache coverage.out coverage.html coverage.txt coverage.xml coverage.covdata*"
 
 [tasks.format-go]
 description = "Format Go code via golangci-lint's formatters"
@@ -587,3 +589,18 @@ trap 'rm -rf "$work"' EXIT
 uv export --quiet --format pylock.toml --no-emit-project -o "$work/pylock.toml"
 uv run pip-audit --cache-dir "$work/cache" --locked "$work"
 '''
+
+# --- JS/TS and nx tasks (upstream candidate: pnpm pin and nx tasks, not yet filed) ---
+# nx wraps the toolchain: project.json targets call the underlying go, uv,
+# or pnpm command, which buys caching and `nx affected`. mise stays the
+# entry point for the lint and check contract.
+
+[tasks.install-js]
+description = "Install the JS workspace from pnpm-lock.yaml without rewriting it"
+run = "pnpm install --frozen-lockfile"
+
+# Extra invocation args append, so `mise run affected -- --base=origin/main`
+# picks the comparison point.
+[tasks.affected]
+description = "Run nx build, test, and lint for the projects the change touches"
+run = "pnpm nx affected -t build test lint"

@@ -1,0 +1,8 @@
+---
+packages:
+  - apps/*
+  - packages/*
+# pnpm 12 fails the install on any unreviewed dependency build script. nx's
+# postinstall only warms optional telemetry and daemon state, so it stays off.
+allowBuilds:
+  nx: false

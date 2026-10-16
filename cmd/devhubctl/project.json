@@ -1,0 +1,56 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "devhubctl",
+  "projectType": "application",
+  "sourceRoot": "cmd/devhubctl",
+  "tags": ["lang:go"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "!{projectRoot}/**/*_test.go",
+        "{workspaceRoot}/internal/**/*.go",
+        "!{workspaceRoot}/internal/**/*_test.go",
+        "{workspaceRoot}/go.mod",
+        "{workspaceRoot}/go.sum",
+        "{workspaceRoot}/tools/go-ldflags.sh"
+      ],
+      "outputs": ["{workspaceRoot}/dist/devhubctl"],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags \"$(bash tools/go-ldflags.sh)\" -o dist/devhubctl ./cmd/devhubctl"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{workspaceRoot}/internal/**/*.go",
+        "{workspaceRoot}/go.mod",
+        "{workspaceRoot}/go.sum"
+      ],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "go test ./cmd/devhubctl/... ./internal/..."
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{workspaceRoot}/internal/**/*.go",
+        "{workspaceRoot}/go.mod",
+        "{workspaceRoot}/go.sum",
+        "{workspaceRoot}/.golangci.yml"
+      ],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "golangci-lint run --modules-download-mode=vendor ./cmd/devhubctl/..."
+      }
+    }
+  }
+}

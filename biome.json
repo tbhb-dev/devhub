@@ -13,6 +13,7 @@
       "**/*.json5",
       "!vendor",
       "!node_modules",
+      "!.nx",
       "!dist",
       "!bin",
       "!.vale"

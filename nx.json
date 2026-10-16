@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "neverConnectToCloud": true,
+  "analytics": false,
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*_test.go",
+      "!{projectRoot}/**/*.test.ts",
+      "!{projectRoot}/**/*.spec.ts"
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/go.mod",
+      "{workspaceRoot}/go.sum",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/pnpm-lock.yaml",
+      "{workspaceRoot}/tsconfig.base.json"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["default", "^production"]
+    },
+    "lint": {
+      "cache": true,
+      "inputs": ["default"]
+    }
+  }
+}

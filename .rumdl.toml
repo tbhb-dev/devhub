@@ -9,6 +9,8 @@ exclude = [
   ".vale",
   "tmp",
   "vendor",
+  "node_modules",
+  ".nx",
   ".claude/skills/*/SKILL.md",
   "CODEOWNERS",
   "LICENSE",

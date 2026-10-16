@@ -29,3 +29,8 @@ repos?
 pyrefly
 pytest
 ruff
+pnpm
+packageManager
+postinstall
+[Ll]ockfiles?
+node_modules

@@ -313,6 +313,12 @@ emit_body() {
 
 # emit_path PATH: a path as text of its own.
 emit_path() {
+  # Most paths need no escaping, and a command substitution forks, which
+  # adds up over a few thousand paths.
+  if [[ $1 != *[$'\\\n\r']* ]]; then
+    printf '\002%s\n' "$1"
+    return 0
+  fi
   # shellcheck disable=SC2312 # esc only rewrites the text
   printf '\002%s\n' "$(esc "$1")"
 }
@@ -331,13 +337,36 @@ emit_blob() {
   emit_file "$1" "$tmp/blob"
 }
 
+# generated_skip F: true when F is generated content that a drift gate
+# guards, so the literal scan can skip its body. vendor/ answers to
+# vendor-check, an APM-deployed file to lint-apm-deploy, a lockfile to
+# lock-check and frozen installs, and an ignored file never reaches a
+# commit. Hand-edited files, .codex/config.toml among them, never match.
+generated_skip() {
+  [[ $1 == vendor/* || $1 =~ $token_exempt ]] && return 0
+  [[ $'\n'$apm_deployed$'\n' == *$'\n'"$1"$'\n'* ]] && return 0
+  [[ $'\n'$tracked_ignored$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
 emit_tree() {
-  local f
+  local f apm_deployed='' tracked_ignored=''
+  if [[ -f tools/apm-deploy.txt ]]; then
+    apm_deployed=$(awk '{ print $2 }' tools/apm-deploy.txt)
+  fi
+  # A tracked file that .gitignore also matches. -z output has no newline
+  # to split on, so a name holding one stays out of the list and is scanned.
+  tracked_ignored=$(git ls-files --cached --ignored --exclude-standard || true)
   git ls-files -z --cached --others --exclude-standard >"$tmp/list"
   while IFS= read -r -d '' f; do
     # With no private literals loaded, a path exempt from the patterns can
     # raise nothing, so reading the vendored and generated trees is wasted.
     if ((loaded == 0)) && [[ $f =~ $pattern_exempt ]]; then continue; fi
+    # With literals loaded, the generated paths still get their names
+    # scanned, but their bodies are the bulk of the tree and a gate guards them.
+    if generated_skip "$f"; then
+      emit_path "$f"
+      continue
+    fi
     if [[ -f $f && ! -L $f ]]; then
       emit_file "$f" "$f"
     elif [[ -L $f ]]; then

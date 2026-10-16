@@ -652,6 +652,58 @@ run_check() {
   [[ $output == *"uv.lock:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
 }
 
+@test "the tree scan skips the bodies of vendor, lockfiles, APM-deployed and ignored files, not hand-edited ones" {
+  mkdir -p vendor/x .claude/skills/s sub tools
+  echo "kestrel99" >vendor/x/f.txt
+  echo "kestrel99" >uv.lock
+  echo "kestrel99" >sub/pnpm-lock.yaml
+  echo "kestrel99" >.claude/skills/s/SKILL.md
+  echo "kestrel99" >tracked.log
+  echo "d .claude/skills/s/SKILL.md" >tools/apm-deploy.txt
+  printf '%s\n' tracked.log >>.gitignore
+  git add -f vendor uv.lock sub .claude tools tracked.log .gitignore
+  run_check
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "the tree scan still finds a literal in hand-edited files, .codex/config.toml included" {
+  mkdir -p vendor/x .codex .claude/skills/s tools
+  echo "kestrel99" >vendor/x/f.txt
+  echo "kestrel99" >notes.md
+  echo "kestrel99" >.codex/config.toml
+  echo "kestrel99" >.claude/skills/s/OTHER.md
+  echo "d .claude/skills/s/SKILL.md" >tools/apm-deploy.txt
+  git add -f vendor notes.md .codex .claude tools
+  run_check
+  [ "$status" -eq 1 ]
+  [[ $output == *"notes.md:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
+  [[ $output == *".codex/config.toml:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
+  [[ $output == *".claude/skills/s/OTHER.md:1: private literal"* ]]
+  [[ $output != *"vendor/"* ]]
+}
+
+@test "a skipped path still has its name scanned for literals" {
+  mkdir -p vendor/x
+  echo ok >vendor/x/kestrel99.txt
+  git add -f vendor
+  run_check
+  [ "$status" -eq 1 ]
+  [[ $output == *"path#"*": private literal"* ]]
+}
+
+@test "a commit message file and a staged hand-edited file still find a literal" {
+  echo "fix: mention kestrel99" >msg.txt
+  run_check msg.txt
+  [ "$status" -eq 1 ]
+  [[ $output == *"msg.txt:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
+  echo "kestrel99" >notes.md
+  git add notes.md
+  run_check --staged
+  [ "$status" -eq 1 ]
+  [[ $output == *"notes.md:1: private literal DEVHUB_PRIVATE_STRINGS entry 2"* ]]
+}
+
 @test "lockfiles skip only the token rule, so a ts.net host or private IP in one is found" {
   local token key
   token=$(printf 'aB3%.0s' {1..21})Z

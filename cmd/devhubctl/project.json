@@ -15,14 +15,14 @@
         "!{workspaceRoot}/internal/**/*_test.go",
         "{workspaceRoot}/go.mod",
         "{workspaceRoot}/go.sum",
-        "{workspaceRoot}/tools/go-ldflags.sh",
+        "{workspaceRoot}/.devtools/scripts/go-ldflags.sh",
         { "runtime": "git rev-parse HEAD" },
         { "runtime": "git describe --tags --always" }
       ],
       "outputs": ["{workspaceRoot}/dist/devhubctl"],
       "options": {
         "cwd": "{workspaceRoot}",
-        "command": "CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags \"$(bash tools/go-ldflags.sh)\" -o dist/devhubctl ./cmd/devhubctl"
+        "command": "CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags \"$(bash .devtools/scripts/go-ldflags.sh)\" -o dist/devhubctl ./cmd/devhubctl"
       }
     },
     "test": {

@@ -166,11 +166,11 @@ repos:
       # The leak check, at two stages. Staged scans the index blobs, so a
       # private value cannot hide behind a cleaned working file. The message
       # file arrives as the hook's argument. The pre-push stage isn't here:
-      # prek hides git's ref lines, so tools/install-pre-push.sh puts the
-      # check in front of prek's pre-push hook instead.
+      # prek hides git's ref lines, so devtools:prek-install puts the check
+      # in front of prek's pre-push hook instead.
       - id: leaks-staged
         name: leak check (staged files)
-        entry: mise run lint-leaks -- --staged
+        entry: mise run devtools:lint-leaks -- --staged
         language: system
         stages: [pre-commit]
         always_run: true
@@ -178,6 +178,6 @@ repos:
 
       - id: leaks-commit-msg
         name: leak check (commit message)
-        entry: mise run lint-leaks --
+        entry: mise run devtools:lint-leaks --
         language: system
         stages: [commit-msg]

@@ -20,6 +20,15 @@ dev = [
   "ruff>=0.15.17",
   { include-group = "test" },
 ]
+# The Ansible toolchain under infra/ansible. Exact pins, each the latest
+# stable release at least two weeks old when it was chosen, so a lock
+# refresh never pulls a release younger than that.
+ops = [
+  "ansible-core==2.21.4",
+  "ansible-lint==26.9.0",
+  "molecule==26.9.0",
+  "molecule-plugins[docker]==26.9.28",
+]
 test = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",

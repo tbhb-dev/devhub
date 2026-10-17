@@ -168,7 +168,7 @@ run = 'uv run --script tools/fix_prose_replacements.py "$usage_file"'
 # prose, so the harness skill and rule trees are excluded.
 [tasks.lint-prose]
 extends = "devtools:lint-prose"
-run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,node_modules/*,.nx/*,.venv/*,.pytest_cache/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
+run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,infra/ansible/.collections/*,node_modules/*,.nx/*,.venv/*,.pytest_cache/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
 
 [tasks.lint-markdown-wrap]
 description = "Fail if any Markdown paragraph spans more than one line"
@@ -222,6 +222,7 @@ run = [
   "mise run devtools:lint-mise",
   "mise run lint-shell",
   "mise run lint-shell-fmt",
+  "mise run lint-ansible",
 ]
 
 [tasks.test-vendored]
@@ -233,8 +234,8 @@ description = "Test the leak check against throwaway repositories"
 run = "bats tools/check-leaks.bats"
 
 [tasks.test-tools]
-description = "Test the devtools pin parser and the prose fixer's failure handling"
-run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats"
+description = "Test the devtools pin parser, the prose fixer's failure handling, and the ops task refusals"
+run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats tools/ops-ansible.bats"
 
 [tasks.test]
 description = "Run every test suite"
@@ -245,6 +246,7 @@ run = [
   "mise run test-go",
   "mise run cover-go",
   "mise run test-py",
+  "mise run test-ansible",
 ]
 
 [tasks.check]
@@ -628,7 +630,8 @@ exit "$rc"
 description = "Check that uv.lock is in sync with pyproject.toml"
 run = "uv lock --check"
 
-# uv exports the locked set to a throwaway pylock.toml, and pip-audit reads
+# uv exports the locked set, every dependency group included, to a
+# throwaway pylock.toml, and pip-audit reads
 # that and nothing else, so the audit never reaches the live environment.
 # The scratch directory, cache included, disappears on exit.
 [tasks.audit]
@@ -638,9 +641,58 @@ run = '''
 set -eu
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-uv export --quiet --format pylock.toml --no-emit-project -o "$work/pylock.toml"
+uv export --quiet --all-groups --format pylock.toml --no-emit-project -o "$work/pylock.toml"
 uv run pip-audit --cache-dir "$work/cache" --locked "$work"
 '''
+
+# --- Ansible tasks (upstream candidate: noted in the devhub Ansible program) ---
+# The toolchain is the uv `ops` group, and the collections pinned in
+# infra/ansible/requirements.yml install into the gitignored
+# infra/ansible/.collections. lint-ansible and test-ansible touch no real
+# host; the ops:* tasks do, through tools/ops-ansible.sh.
+
+[tasks.install-ansible]
+description = "Install the pinned Ansible collections into infra/ansible/.collections"
+dir = "{{config_root}}/infra/ansible"
+run = "uv run --group ops ansible-galaxy collection install -r requirements.yml -p .collections"
+
+# The stub inventory stands in for the private one, so the syntax check
+# sees both sources the ops tasks pass.
+[tasks.lint-ansible]
+description = "Lint the Ansible tree and syntax-check the playbooks against a stub inventory"
+depends = ["install-ansible"]
+dir = "{{config_root}}/infra/ansible"
+run = [
+  "uv run --group ops ansible-lint",
+  "uv run --group ops ansible-playbook --syntax-check -i inventory -i tests/inventory playbooks/accounts.yml playbooks/verify.yml",
+]
+
+# The bats file checks the ssh command line tools/ops-ansible.sh builds,
+# against a stub ssh; it lives here because it needs the uv ops group.
+[tasks.test-ansible]
+description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
+depends = ["install-ansible"]
+dir = "{{config_root}}/infra/ansible/roles/ops_accounts"
+env = { ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
+run = [
+  "bats {{config_root}}/tools/ops-ansible-ssh.bats",
+  "uv run --group ops molecule test",
+]
+
+# Extra invocation args reach ansible-playbook, e.g. `--limit edge-1`.
+# check and apply also take `--root` and a playbook name first; see the
+# script header.
+[tasks."ops:verify"]
+description = "Run the verify playbook against the real hosts as ops-ro"
+run = "bash tools/ops-ansible.sh verify"
+
+[tasks."ops:check"]
+description = "Dry-run a playbook against the real hosts as ops, with --check --diff"
+run = "bash tools/ops-ansible.sh check"
+
+[tasks."ops:apply"]
+description = "Apply a playbook to the real hosts as ops; operator-only, refused without a terminal"
+run = "bash tools/ops-ansible.sh apply"
 
 # --- JS/TS and nx tasks (upstream candidate: pnpm pin and nx tasks, not yet filed) ---
 # nx wraps the toolchain: project.json targets call the underlying go, uv,

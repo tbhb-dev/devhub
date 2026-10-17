@@ -1,0 +1,5 @@
+---
+# Non-identifying defaults. Anything that names a host, an address, a key
+# or a path on the operator's workstation belongs in the private inventory.
+verify_os_distribution: Ubuntu
+verify_os_version: "26.04"

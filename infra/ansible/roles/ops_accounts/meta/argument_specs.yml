@@ -1,0 +1,15 @@
+---
+argument_specs:
+  main:
+    short_description: Create the ops-ro and ops remote accounts
+    options:
+      ops_accounts_ro_keys:
+        type: list
+        elements: str
+        required: true
+        description: Public keys authorized for ops-ro, which has no sudo.
+      ops_accounts_admin_keys:
+        type: list
+        elements: str
+        required: true
+        description: Public keys authorized for ops, which has full sudo.

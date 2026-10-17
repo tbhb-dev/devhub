@@ -34,3 +34,6 @@ packageManager
 postinstall
 [Ll]ockfiles?
 node_modules
+[Aa]nsible
+tailnet
+sudo

@@ -1,0 +1,39 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "ansible",
+  "projectType": "application",
+  "sourceRoot": "infra/ansible",
+  "tags": ["lang:ansible"],
+  "targets": {
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "!{projectRoot}/.collections/**/*",
+        "{workspaceRoot}/uv.lock",
+        "{workspaceRoot}/mise.toml",
+        "{workspaceRoot}/tools/ops-ansible*"
+      ],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "mise run lint-ansible"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "!{projectRoot}/.collections/**/*",
+        "{workspaceRoot}/uv.lock",
+        "{workspaceRoot}/mise.toml",
+        "{workspaceRoot}/tools/ops-ansible*"
+      ],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "mise run test-ansible"
+      }
+    }
+  }
+}

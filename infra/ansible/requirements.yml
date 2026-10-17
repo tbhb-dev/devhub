@@ -1,0 +1,8 @@
+---
+# Installed into the gitignored .collections/ by `mise run install-ansible`.
+# community.docker serves only Molecule's Docker driver.
+collections:
+  - name: ansible.posix
+    version: 2.2.2
+  - name: community.docker
+    version: 5.3.0

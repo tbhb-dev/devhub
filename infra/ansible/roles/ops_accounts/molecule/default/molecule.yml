@@ -1,0 +1,28 @@
+---
+# Collections come from infra/ansible/.collections through
+# ANSIBLE_COLLECTIONS_PATH, which test-ansible sets after install-ansible
+# fills it, so the galaxy dependency step and the prerun stay off.
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: ops-accounts-ubuntu-2604
+    image: ubuntu:26.04
+    pre_build_image: false
+prerun: false
+provisioner:
+  name: ansible
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    - check
+    - converge
+    - idempotence
+    - verify
+    - destroy

@@ -1,0 +1,62 @@
+---
+# Root's keys and sshd stay untouched here; SSH hardening owns both.
+
+# argument_specs rejects an unset list but accepts an empty one, and an
+# exclusive empty key list would lock the account out.
+- name: Require at least one key per account
+  ansible.builtin.assert:
+    that:
+      - ops_accounts_ro_keys | length > 0
+      - ops_accounts_admin_keys | length > 0
+    fail_msg: ops_accounts_ro_keys and ops_accounts_admin_keys each need at least one key
+    quiet: true
+
+- name: Install sudo
+  ansible.builtin.apt:
+    name: sudo
+    state: present
+
+# groups without append sets the full supplementary list, so ops-ro can
+# never keep a sudo or admin membership from earlier.
+- name: Create ops-ro
+  ansible.builtin.user:
+    name: ops-ro
+    shell: /bin/bash
+    groups: [adm]
+    append: false
+    password_lock: true
+  register: ops_accounts_ro_user
+
+- name: Create ops
+  ansible.builtin.user:
+    name: ops
+    shell: /bin/bash
+    password_lock: true
+  register: ops_accounts_admin_user
+
+# In check mode an account the run would create doesn't exist yet, and
+# authorized_key can't resolve its home, so the key tasks wait for it.
+- name: Authorize the ops-ro keys
+  ansible.posix.authorized_key:
+    user: ops-ro
+    key: "{{ ops_accounts_ro_keys | join('\n') }}"
+    exclusive: true
+  when: not (ansible_check_mode and ops_accounts_ro_user is changed)
+
+- name: Authorize the ops keys
+  ansible.posix.authorized_key:
+    user: ops
+    key: "{{ ops_accounts_admin_keys | join('\n') }}"
+    exclusive: true
+  when: not (ansible_check_mode and ops_accounts_admin_user is changed)
+
+# The password is locked, so sudo can't prompt for one. The approval the
+# ops key needs at SSH time is the barrier instead.
+- name: Grant ops full sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/ops
+    content: "ops ALL=(ALL:ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s

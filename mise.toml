@@ -28,6 +28,7 @@ includes = [
   ".devtools/tasks/fix.toml",
   ".devtools/tasks/format.toml",
   ".devtools/tasks/git-hooks.toml",
+  ".devtools/tasks/leaks.toml",
   ".devtools/tasks/lint.toml",
   ".devtools/tasks/pins.toml",
   ".devtools/tasks/preapproval.toml",

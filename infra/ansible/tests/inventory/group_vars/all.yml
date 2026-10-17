@@ -1,0 +1,9 @@
+---
+# The shape of the private group_vars, with placeholder values.
+devhub_ssh_key_files:
+  ops-ro: ~/.ssh/example-ops-ro
+  ops: ~/.ssh/example-ops.pub
+ops_accounts_ro_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMGw+YV4N01IYPAQC60UXUk+TZNrSPuT+0VWaENyHEjh example-ops-ro
+ops_accounts_admin_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMBxMcLBO2dNsuwi0clAzEHghsyOUtwtQU2PXYShQKQa example-ops

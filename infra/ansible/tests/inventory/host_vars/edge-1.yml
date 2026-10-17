@@ -1,0 +1,4 @@
+---
+# Stands in for the private inventory in lint-ansible, so the syntax check
+# sees both sources the ops tasks pass. Placeholder values only.
+ansible_host: edge-1.example.com

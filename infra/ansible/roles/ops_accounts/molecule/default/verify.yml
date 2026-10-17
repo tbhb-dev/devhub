@@ -1,0 +1,45 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Validate the sudoers drop-in
+      ansible.builtin.command:
+        cmd: visudo -cf /etc/sudoers.d/ops
+      changed_when: false
+
+    - name: Read the ops-ro groups
+      ansible.builtin.command:
+        cmd: id -nG ops-ro
+      register: ops_accounts_ro_groups
+      changed_when: false
+
+    - name: Read the sudo rights of each account
+      ansible.builtin.command:
+        cmd: sudo -l -U {{ item }}
+      loop: [ops-ro, ops]
+      register: ops_accounts_sudo
+      changed_when: false
+
+    - name: Read the password state of each account
+      ansible.builtin.command:
+        cmd: passwd -S {{ item }}
+      loop: [ops-ro, ops]
+      register: ops_accounts_passwd
+      changed_when: false
+
+    - name: Read the authorized keys
+      ansible.builtin.slurp:
+        src: /home/{{ item }}/.ssh/authorized_keys
+      loop: [ops-ro, ops]
+      register: ops_accounts_keys
+
+    - name: Check the accounts
+      ansible.builtin.assert:
+        that:
+          - ops_accounts_ro_groups.stdout.split() | sort == ['adm', 'ops-ro']
+          - "'is not allowed to run sudo' in ops_accounts_sudo.results[0].stdout"
+          - "'(ALL : ALL) NOPASSWD: ALL' in ops_accounts_sudo.results[1].stdout"
+          - ops_accounts_passwd.results | map(attribute='stdout') | map('split') | map(attribute=1) | list == ['L', 'L']
+          - "'molecule-ro' in ops_accounts_keys.results[0].content | b64decode"
+          - "'molecule-admin' in ops_accounts_keys.results[1].content | b64decode"

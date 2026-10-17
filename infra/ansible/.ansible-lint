@@ -1,0 +1,7 @@
+---
+# lint-ansible installs the pinned collections first, so ansible-lint
+# never reaches Galaxy itself.
+profile: production
+offline: true
+exclude_paths:
+  - .collections/

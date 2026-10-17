@@ -20,6 +20,15 @@ dev = [
   "ruff>=0.15.17",
   { include-group = "test" },
 ]
+# The Ansible toolchain under infra/ansible. Exact pins, each the latest
+# stable release at least two weeks old when it was chosen, so a lock
+# refresh never pulls a release younger than that.
+ops = [
+  "ansible-core==2.21.4",
+  "ansible-lint==26.9.0",
+  "molecule==26.9.0",
+  "molecule-plugins[docker]==26.9.28",
+]
 test = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",
@@ -50,9 +59,10 @@ exclude_also = [
 
 [tool.pyrefly]
 # The harness directories stay out because they hold deployed copies of
-# upstream agent primitives.
+# upstream agent primitives, and .devtools because it holds the vendored
+# payload, config templates included.
 project-includes = ["apps", "packages", "tools", "tests"]
-project-excludes = [".claude", ".agents", ".codex"]
+project-excludes = [".claude", ".agents", ".codex", ".devtools"]
 # The strict preset is pyrefly's hardest baseline: it demands parameter
 # annotations and refuses implicit Any. The errors table below names each
 # diagnostic kind at error severity on top of it, so the gate holds even
@@ -231,8 +241,9 @@ testpaths = ["apps", "packages", "tests"]
 [tool.ruff]
 line-length = 88
 # .claude/, .agents/, and .codex/ hold deployed copies of upstream agent
-# primitives, which answer to upstream's gates rather than this repo's.
-exclude = [".claude", ".agents", ".codex"]
+# primitives, and .devtools/ the vendored payload with its own ruff.toml
+# template. Both answer to upstream's gates rather than this repo's.
+exclude = [".claude", ".agents", ".codex", ".devtools"]
 
 [tool.ruff.lint]
 select = ["ALL"]

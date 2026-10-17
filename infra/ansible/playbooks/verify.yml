@@ -1,0 +1,110 @@
+---
+# The host health checks from the bootstrap handoff. Runs as ops-ro with
+# no become, so every check reads only what an adm member can read. Each
+# check records a regression rather than failing on the spot, and the
+# last task fails once with the whole list.
+- name: Verify host health
+  hosts: all
+  gather_facts: true
+  # The min subset carries the OS release, the only fact the checks read.
+  gather_subset: [min]
+  tasks:
+    - name: Read the RAID status
+      ansible.builtin.slurp:
+        src: /proc/mdstat
+      register: verify_mdstat
+      failed_when: false
+
+    - name: Read the clock synchronization state
+      ansible.builtin.command:
+        cmd: timedatectl show --property=NTPSynchronized --value
+      register: verify_ntp
+      changed_when: false
+      failed_when: false
+
+    # The systemd module manages one named unit and can't list failed ones.
+    - name: List failed systemd units
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl list-units --state=failed --no-legend --plain
+      register: verify_failed_units
+      changed_when: false
+      failed_when: false
+
+    - name: Audit the package database
+      ansible.builtin.command:
+        cmd: dpkg --audit
+      register: verify_dpkg_audit
+      environment:
+        LC_ALL: C
+      changed_when: false
+      failed_when: false
+
+    - name: Look for the reboot-required marker
+      ansible.builtin.stat:
+        path: /run/reboot-required
+      register: verify_reboot_required
+
+    # The apt module can't simulate an upgrade without root.
+    - name: Simulate an upgrade
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: apt-get -s upgrade
+      register: verify_apt_upgrade
+      environment:
+        LC_ALL: C
+      changed_when: false
+      failed_when: false
+
+    - name: Evaluate the checks
+      vars:
+        verify_mdstat_text: "{{ verify_mdstat.content | default('') | b64decode }}"
+        verify_md_status: "{{ verify_mdstat_text | regex_findall('\\[([U_]+)\\]') }}"
+        verify_md_arrays: "{{ verify_mdstat_text | regex_findall('^(md\\d+) :', multiline=true) }}"
+        verify_kept_back: >-
+          {{ (verify_apt_upgrade.stdout
+              | regex_findall('kept back:\n((?:  .*\n?)+)') + [''])
+             | first | split | list }}
+        verify_deferred: >-
+          {{ (verify_apt_upgrade.stdout
+              | regex_findall('deferred due to phasing:\n((?:  .*\n?)+)') + [''])
+             | first | split | list }}
+      ansible.builtin.set_fact:
+        verify_report:
+          os_release: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+          raid_arrays: "{{ verify_md_arrays }}"
+          raid_status: "{{ verify_md_status }}"
+          raid_sync: "{{ verify_mdstat_text | regex_findall('(?:resync|recovery|reshape|check)\\s*=\\s*[0-9.]+%') }}"
+          ntp_synchronized: "{{ verify_ntp.stdout | default('') }}"
+          failed_units: "{{ verify_failed_units.stdout_lines }}"
+          dpkg_audit: "{{ verify_dpkg_audit.stdout_lines }}"
+          reboot_required: "{{ verify_reboot_required.stat.exists }}"
+          kept_back: "{{ verify_kept_back }}"
+          deferred_by_phasing: "{{ verify_deferred }}"
+        verify_regressions: >-
+          {{ (
+            ([] if ansible_facts.distribution == verify_os_distribution
+                   and ansible_facts.distribution_version == verify_os_version
+                else ['OS release is not ' ~ verify_os_distribution ~ ' ' ~ verify_os_version])
+            + ([] if verify_md_status | length > 0 else ['no RAID arrays in /proc/mdstat'])
+            + ([] if verify_md_status | select('search', '_') | list | length == 0
+                else ['a RAID array is missing a member'])
+            + ([] if verify_md_status | length == verify_md_arrays | length
+                else ['a RAID array reports no member status'])
+            + ([] if verify_failed_units.rc == 0 else ['systemctl list-units failed'])
+            + ([] if verify_failed_units.stdout_lines | length == 0 else ['systemd reports failed units'])
+            + ([] if verify_dpkg_audit.rc == 0 else ['dpkg --audit failed'])
+            + ([] if verify_dpkg_audit.stdout_lines | length == 0 else ['dpkg --audit reports problems'])
+            + ([] if not verify_reboot_required.stat.exists else ['a reboot is required'])
+            + ([] if verify_apt_upgrade.rc == 0 else ['apt-get -s upgrade failed'])
+          ) }}
+
+    # A resync, NTPSynchronized, and kept-back packages are reported, not
+    # failed. Time sync joins the failures once the host baseline owns it.
+    - name: Report the checks
+      ansible.builtin.debug:
+        var: verify_report
+
+    - name: Fail on any regression
+      ansible.builtin.assert:
+        that: verify_regressions | length == 0
+        fail_msg: "{{ verify_regressions }}"
+        success_msg: no regressions

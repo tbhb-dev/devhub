@@ -81,8 +81,8 @@ if [[ ${#skills[@]} -eq 0 ]]; then
 fi
 for skill in "${skills[@]}"; do
   name=$(basename "$skill")
-  if [[ ! -f .agents/skills/codex-$name/SKILL.md ]]; then
-    echo "Claude skill $name has no Codex twin at .agents/skills/codex-$name" >&2
+  if [[ ! -f .agents/skills/$name/SKILL.md ]]; then
+    echo "Claude skill $name has no Codex twin at .agents/skills/$name" >&2
     rc=1
   fi
 done

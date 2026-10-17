@@ -1,0 +1,6 @@
+# Paths the shared leak gate (devtools:lint-leaks) exempts from its
+# publishable patterns, one ERE per line. Private literals still apply.
+# Both files are leak-gate test suites, whose fixtures plant the shapes
+# the patterns look for.
+^tools/check-leaks\.bats$
+^\.devtools/scripts/check-leaks\.bats$

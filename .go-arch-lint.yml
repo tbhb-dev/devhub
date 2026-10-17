@@ -37,6 +37,8 @@ exclude:
   - .claude
   - .agents
   - .codex
+  # Collections installed by install-ansible, Go test images included.
+  - infra/ansible/.collections
 
 components:
   cmd:

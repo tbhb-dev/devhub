@@ -1,0 +1,8 @@
+---
+- name: Apply the ops accounts
+  hosts: all
+  # The role reads no facts, and gathering them costs a round trip.
+  gather_facts: false
+  become: true
+  roles:
+    - ops_accounts

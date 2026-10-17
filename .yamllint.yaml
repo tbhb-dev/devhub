@@ -1,6 +1,8 @@
 ---
 extends: default
 
+yaml-files: ["*.yaml", "*.yml", ".yamllint", ".ansible-lint"]
+
 ignore-from-file: [.gitignore, .yamllintignore]
 
 rules:

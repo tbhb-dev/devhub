@@ -17,9 +17,23 @@ mise pins the tools and defines the tasks. The shared half arrives from `tbhb-de
 - `mise run lint` runs every lint gate in order.
 - `mise run test` runs the test suites.
 - `mise run check` runs both.
-- `mise run devtools:update-pins <version>` moves every devtools pin together, except one. Because tbhb-dev/devtools#156 has no fix yet, `update-pins` and `check-pins` skip the `renovate-go-config.json5` line in `.github/renovate.json5`, so after a bump move it by hand to the same commit hash and `// vX.Y.Z` comment as the preceding line. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`.
+- `mise run devtools:update-pins <version>` moves every devtools pin together, both Renovate presets included. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`.
 
 The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Claude write hook. `mise run bootstrap` installs it through `mise run install-guard-markdown`, which takes the version from the devtools pin in `apm.yml`. A pin bump moves it too. Keep the Go bin directory on PATH.
+
+## Operations
+
+`infra/ansible/` holds the Ansible tree for host-level operations, and every run reads two inventories. Hosts appear there only as aliases such as `edge-1`, and the inventory in this repository sets groups and defaults that identify nothing. The private companion repository, cloned beside this one, stores the second inventory. That inventory maps each alias to its real host and pins `known_hosts`. Its variables add the authorized public keys and `devhub_ssh_key_files`, which gives the key file for each remote account. Each `ops:*` task finds the private one through `DEVHUB_PRIVATE_DIR` in `mise.local.toml`. Without it, the task stops. mise reads every `mise.local.toml` from the working directory up, so a worktree inside this checkout still sets the variable. To see the refusal, run `DEVHUB_PRIVATE_DIR= bash tools/ops-ansible.sh verify` directly, never `mise run ops:verify`.
+
+Use the alias for a host everywhere in this repository and its history. Only the operator edits the private repository. An agent keeps every real host name, address, tailnet name, key, fingerprint, and console URL out of what it writes.
+
+An agent may run these tasks on its own:
+
+- `mise run lint-ansible` runs `ansible-lint` and a syntax check against a stub inventory.
+- `mise run test-ansible` runs the Molecule scenarios in Docker.
+- `mise run ops:verify` runs the verification playbook against the real hosts as `ops-ro`, which has no sudo.
+
+The other two need the operator. `mise run ops:check` runs as `ops` with `--check --diff`, and the `ops` key asks the operator to approve each new session. `mise run ops:apply` stays operator-only until tbhb-dev/devtools#165 merges, and it refuses to run without a terminal.
 
 ## Commit messages
 

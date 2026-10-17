@@ -58,3 +58,8 @@ SQUASH_AGENTMSG
 !.vale/config/vocabularies/
 .vale/config/vocabularies/*
 !.vale/config/vocabularies/project/
+
+# Ansible collections installed from infra/ansible/requirements.yml, and
+# the cache ansible-lint and Molecule keep beside a project
+infra/ansible/.collections/
+.ansible/

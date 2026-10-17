@@ -94,13 +94,12 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # Scan source commits rather than GitHub's synthetic merge signature.
-        run: mise run lint-leaks -- --range "${BASE_SHA}..${HEAD_SHA}"
+        run: mise run devtools:lint-leaks -- --range "${BASE_SHA}..${HEAD_SHA}"
 
       - name: Test the shell tools
         run: |
           mise run test-vendored
           mise run test-tools
-          mise run test-leaks
 
   test-matrix:
     name: "test (${{ matrix.os }})"

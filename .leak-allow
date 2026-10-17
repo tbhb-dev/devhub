@@ -1,6 +1,17 @@
 # Paths the shared leak gate (devtools:lint-leaks) exempts from its
 # publishable patterns, one ERE per line. Private literals still apply.
-# Both files are leak-gate test suites, whose fixtures plant the shapes
-# the patterns look for.
-^tools/check-leaks\.bats$
-^\.devtools/scripts/check-leaks\.bats$
+#
+# Vendored and deployed trees answer to their upstream: the devtools
+# payload and its mise drop-ins, the APM-deployed agent files, the Vale
+# styles, and the Go and package-manager module trees. The shared gate's
+# own test suite sits under .devtools/ and plants the base shapes.
+^\.claude/
+^\.agents/
+^\.devtools/
+^\.config/mise/conf\.d/
+^\.vale/
+^vendor/
+^node_modules/
+^apm_modules/
+# The repository rules spell out the shapes they look for.
+^\.leak-patterns$

@@ -1,0 +1,30 @@
+# Repository rules for the shared leak gate (devtools:lint-leaks), one
+# extended regular expression per line. The gate lowercases the text
+# before it matches, so every rule here is written in lower case, and a
+# finding names the rule by its line number among the rules, never the
+# matched text. .leak-allow exempts this file, because each rule matches
+# its own spelling.
+#
+# A tailnet IPv6 address: the Tailscale ULA prefix.
+fd7a:115c:a1e0
+# A private or tailnet IPv4 address right after a host name label, as in
+# nip.io style names. The base rules skip an address after a dot so that
+# version strings pass; a letter or hyphen before the dot rules that out.
+[a-z-]\.(10\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])|172\.(1[6-9]|2[0-9]|3[01])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])|192\.168\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9]))
+# A Hetzner Cloud API token shape: a run of exactly 64 letters and digits
+# that is not plain hex, so SHA-256 digests and git object ids pass. Each
+# alternative places the first character past f at a different offset. A
+# run that touches a plus sign or a slash, or ends at an equals sign, sits
+# inside base64, such as a lockfile integrity hash, and passes. So does
+# a run with only whitespace before it on its line: commit signatures
+# arrive as base64 lines that start with a space, and some of them hold
+# no plus sign or slash. A token after a key, as in `token: ...` or
+# `TOKEN=...`, still matches, and so does one at the start of a line.
+(^|[^[:space:]].*[^a-z0-9+/])([g-z][a-z0-9]{63}|[0-9a-f]{1}[g-z][a-z0-9]{62}|[0-9a-f]{2}[g-z][a-z0-9]{61}|[0-9a-f]{3}[g-z][a-z0-9]{60}|[0-9a-f]{4}[g-z][a-z0-9]{59}|[0-9a-f]{5}[g-z][a-z0-9]{58}|[0-9a-f]{6}[g-z][a-z0-9]{57}|[0-9a-f]{7}[g-z][a-z0-9]{56}|[0-9a-f]{8}[g-z][a-z0-9]{55}|[0-9a-f]{9}[g-z][a-z0-9]{54}|[0-9a-f]{10}[g-z][a-z0-9]{53}|[0-9a-f]{11}[g-z][a-z0-9]{52}|[0-9a-f]{12}[g-z][a-z0-9]{51}|[0-9a-f]{13}[g-z][a-z0-9]{50}|[0-9a-f]{14}[g-z][a-z0-9]{49}|[0-9a-f]{15}[g-z][a-z0-9]{48}|[0-9a-f]{16}[g-z][a-z0-9]{47}|[0-9a-f]{17}[g-z][a-z0-9]{46}|[0-9a-f]{18}[g-z][a-z0-9]{45}|[0-9a-f]{19}[g-z][a-z0-9]{44}|[0-9a-f]{20}[g-z][a-z0-9]{43}|[0-9a-f]{21}[g-z][a-z0-9]{42}|[0-9a-f]{22}[g-z][a-z0-9]{41}|[0-9a-f]{23}[g-z][a-z0-9]{40}|[0-9a-f]{24}[g-z][a-z0-9]{39}|[0-9a-f]{25}[g-z][a-z0-9]{38}|[0-9a-f]{26}[g-z][a-z0-9]{37}|[0-9a-f]{27}[g-z][a-z0-9]{36}|[0-9a-f]{28}[g-z][a-z0-9]{35}|[0-9a-f]{29}[g-z][a-z0-9]{34}|[0-9a-f]{30}[g-z][a-z0-9]{33}|[0-9a-f]{31}[g-z][a-z0-9]{32}|[0-9a-f]{32}[g-z][a-z0-9]{31}|[0-9a-f]{33}[g-z][a-z0-9]{30}|[0-9a-f]{34}[g-z][a-z0-9]{29}|[0-9a-f]{35}[g-z][a-z0-9]{28}|[0-9a-f]{36}[g-z][a-z0-9]{27}|[0-9a-f]{37}[g-z][a-z0-9]{26}|[0-9a-f]{38}[g-z][a-z0-9]{25}|[0-9a-f]{39}[g-z][a-z0-9]{24}|[0-9a-f]{40}[g-z][a-z0-9]{23}|[0-9a-f]{41}[g-z][a-z0-9]{22}|[0-9a-f]{42}[g-z][a-z0-9]{21}|[0-9a-f]{43}[g-z][a-z0-9]{20}|[0-9a-f]{44}[g-z][a-z0-9]{19}|[0-9a-f]{45}[g-z][a-z0-9]{18}|[0-9a-f]{46}[g-z][a-z0-9]{17}|[0-9a-f]{47}[g-z][a-z0-9]{16}|[0-9a-f]{48}[g-z][a-z0-9]{15}|[0-9a-f]{49}[g-z][a-z0-9]{14}|[0-9a-f]{50}[g-z][a-z0-9]{13}|[0-9a-f]{51}[g-z][a-z0-9]{12}|[0-9a-f]{52}[g-z][a-z0-9]{11}|[0-9a-f]{53}[g-z][a-z0-9]{10}|[0-9a-f]{54}[g-z][a-z0-9]{9}|[0-9a-f]{55}[g-z][a-z0-9]{8}|[0-9a-f]{56}[g-z][a-z0-9]{7}|[0-9a-f]{57}[g-z][a-z0-9]{6}|[0-9a-f]{58}[g-z][a-z0-9]{5}|[0-9a-f]{59}[g-z][a-z0-9]{4}|[0-9a-f]{60}[g-z][a-z0-9]{3}|[0-9a-f]{61}[g-z][a-z0-9]{2}|[0-9a-f]{62}[g-z][a-z0-9]{1}|[0-9a-f]{63}[g-z])([^a-z0-9+/=]|$)
+# An AWS access key ID: a known four-letter prefix and 16 more characters.
+(^|[^a-z0-9])(akia|asia|abia|acca|agpa|aida|aipa|anpa|anva|aroa)[a-z0-9]{16}([^a-z0-9]|$)
+# GCP service-account key file markers.
+"type"[[:blank:]]*:[[:blank:]]*"service_account"
+"private_key_id"
+# A private key PEM header, with or without the closing dashes.
+-----begin ([a-z0-9]+ )*private key

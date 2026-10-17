@@ -46,7 +46,6 @@ run = [
   "mise run install-tools",
   "mise run install-guard-markdown",
   "mise run devtools:prek-install",
-  "mise run install-pre-push",
 ]
 
 [tasks.install-toolchain]
@@ -77,22 +76,6 @@ esac
 [tasks.check-vendored]
 description = "Fail when the vendored payload differs from what vendir.lock.yml pins, without touching the checkout"
 run = "bash tools/check-vendored.sh"
-
-# Arguments pass through to the script: `mise run lint-leaks -- --staged`.
-# With none it scans the working tree.
-# quiet keeps mise from echoing the arguments, which can be private filenames.
-[tasks.lint-leaks]
-description = "Fail when a file carries a private value or a private-network or credential pattern"
-quiet = true
-run = "bash tools/check-leaks.sh"
-
-[tasks.install-pre-push]
-description = "Put the leak check in front of prek's pre-push hook"
-run = "bash tools/install-pre-push.sh"
-
-[tasks.lint-hooks]
-description = "Fail locally when the leak-check pre-push hook isn't installed"
-run = "bash tools/install-pre-push.sh --check"
 
 # APM merges hook declarations into each harness's settings additively and
 # never reconciles, while `apm audit --ci` replays the same merge from an
@@ -141,6 +124,31 @@ extends = "devtools:lint-commit-msg"
 [tasks.lint-squash-msg]
 extends = "devtools:lint-squash-msg"
 
+# The shared gate's working-tree scan reads every tracked file, vendor/
+# included (tbhb-dev/devtools#218). `go mod vendor` writes that tree from
+# public modules and vendor-check holds it to go.sum, so this scan hands
+# the gate every other file instead. Staged, range, and pre-push scans run
+# devtools:lint-leaks directly and still read any vendored file a commit
+# carries. The gate's file mode takes regular files only, so anything else
+# fails here rather than passing without a scan.
+[tasks.lint-leaks]
+description = "Scan the working tree for private values, except the vendored Go modules"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+list=$(mktemp)
+trap 'rm -f "$list"' EXIT
+while IFS= read -r -d '' f; do
+  if [[ -L $f || (-e $f && ! -f $f) ]]; then
+    echo "lint-leaks: a tracked path isn't a regular file; scan it with mise run devtools:lint-leaks" >&2
+    exit 1
+  fi
+  [[ -f $f ]] && printf '%s\0' "$f"
+done < <(git ls-files -z --cached --others --exclude-standard -- ':!:vendor/') >"$list"
+xargs -0 bash .devtools/scripts/check-leaks.sh <"$list"
+'''
+
 # The pull request counterpart the pr skill calls. Body copied from
 # devtools/mise.toml [tasks.lint-pr-description]; validate-description.sh
 # exists once apm install has deployed the pr skill.
@@ -150,7 +158,7 @@ run = [
   "bash .claude/skills/pr/scripts/validate-description.sh",
   "vale --output=ai-tells-agent.tmpl PR_AGENTDESC.md",
   "cspell --config .cspell.jsonc --no-summary --no-progress PR_AGENTDESC.md",
-  "bash tools/check-leaks.sh PR_AGENTDESC.md",
+  "bash .devtools/scripts/check-leaks.sh PR_AGENTDESC.md",
 ]
 
 # Both draft tasks are scoped to the one file they receive. The fix-prose
@@ -204,7 +212,7 @@ extends = "devtools:lint"
 run = [
   "mise run check-vendored",
   "mise run lint-leaks",
-  "mise run lint-hooks",
+  "mise run devtools:check-leak-hook",
   "mise run devtools:check-pins",
   "mise run lint-apm",
   "mise run lint-apm-deploy",
@@ -229,20 +237,15 @@ run = [
 description = "Test the vendored-payload drift gate on a copy of the tree"
 run = "bats tools/check-vendored.bats"
 
-[tasks.test-leaks]
-description = "Test the leak check against throwaway repositories"
-run = "bats tools/check-leaks.bats"
-
 [tasks.test-tools]
-description = "Test the devtools pin parser, the prose fixer's failure handling, and the ops task refusals"
-run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats tools/ops-ansible.bats"
+description = "Test the devtools pin parser, the prose fixer's failure handling, the ops task refusals, and the leak gate rules"
+run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats"
 
 [tasks.test]
 description = "Run every test suite"
 run = [
   "mise run test-vendored",
   "mise run test-tools",
-  "mise run test-leaks",
   "mise run test-go",
   "mise run cover-go",
   "mise run test-py",
@@ -261,11 +264,11 @@ run = ["mise run check", "mise run devtools:gitleaks"]
 
 [tasks.build]
 description = "Build every binary into the bin directory"
-run = 'CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$(bash tools/go-ldflags.sh)" -o bin/ ./cmd/...'
+run = 'CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$(bash .devtools/scripts/go-ldflags.sh)" -o bin/ ./cmd/...'
 
 [tasks.install]
 description = "Install every binary to GOPATH/bin"
-run = 'CGO_ENABLED=0 go install -trimpath -buildvcs=false -ldflags "$(bash tools/go-ldflags.sh)" ./cmd/...'
+run = 'CGO_ENABLED=0 go install -trimpath -buildvcs=false -ldflags "$(bash .devtools/scripts/go-ldflags.sh)" ./cmd/...'
 
 # The first argument names the ./cmd/<bin> package; the rest pass
 # through to it. No usage spec, because a spec declaring one argument
@@ -278,7 +281,7 @@ run = '''
 set -euo pipefail
 bin=$1
 shift
-go run -ldflags "$(bash tools/go-ldflags.sh)" "./cmd/$bin" "$@"
+go run -ldflags "$(bash .devtools/scripts/go-ldflags.sh)" "./cmd/$bin" "$@"
 '''
 
 [tasks.clean]
@@ -399,13 +402,13 @@ run = 'go tool gremlins unleash --timeout-coefficient "${GREMLINS_TIMEOUT_COEFFI
 description = "Mutate the whole module from the repository root"
 run = 'go tool gremlins unleash --timeout-coefficient "${GREMLINS_TIMEOUT_COEFFICIENT:-100}" .'
 
-# tools/fuzz.sh lists every Fuzz* function under each package and runs it
+# .devtools/scripts/fuzz.sh lists every Fuzz* function under each package and runs it
 # for the FUZZ_TIME budget (default 30s); the nightly workflow calls the
 # same script with a longer FUZZ_TIME.
 [tasks.fuzz-go]
 description = "Run native Go fuzz targets under [path] (default the entire module)"
 usage = 'arg "<path>" default="./..."'
-run = "tools/fuzz.sh $usage_path"
+run = "bash .devtools/scripts/fuzz.sh $usage_path"
 
 [tasks.cover-go]
 description = "Run the Go tests with coverage, print the per-function breakdown, and enforce the .testcoverage.yml thresholds"
@@ -601,7 +604,7 @@ run = "uv run ruff check"
 # header.
 [tasks.lint-types]
 description = "Type check with pyrefly"
-run = "bash tools/lint-types.sh"
+run = "bash .devtools/scripts/lint-types.sh"
 
 [tasks.lint-py-all]
 description = "Aggregate every Python-flavored lint gate"

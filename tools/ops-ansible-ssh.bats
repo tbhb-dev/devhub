@@ -18,7 +18,7 @@ setup() {
 ansible_host: 192.0.2.10
 EOF
   cat >"$inv/group_vars/all.yml" <<EOF
-devhub_ssh_key_files:
+techops_ssh_key_files:
   ops-ro: $work/ro-key
   ops: $work/ops-key.pub
 ops_accounts_ro_keys: [ssh-ed25519 AAAA example-ops-ro]
@@ -51,7 +51,7 @@ first() {
 }
 
 run_ops() {
-  DEVHUB_PRIVATE_DIR=$work/private ANSIBLE_SSH_EXECUTABLE=$work/ssh \
+  TECHOPS_INTERNAL_DIR=$work/private ANSIBLE_SSH_EXECUTABLE=$work/ssh \
     ANSIBLE_SSH_RETRIES=0 run bash "$script" "$@"
   [ -f "$work/argv" ]
 }

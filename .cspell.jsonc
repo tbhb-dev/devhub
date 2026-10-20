@@ -35,10 +35,10 @@
   ],
   "dictionaryDefinitions": [
     {
-      "name": "devhub",
+      "name": "techops",
       "path": "./.cspell-words.txt",
       "addWords": true
     }
   ],
-  "dictionaries": ["devhub"]
+  "dictionaries": ["techops"]
 }

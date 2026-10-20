@@ -1,4 +1,4 @@
-module github.com/tbhb-dev/devhub
+module github.com/tbhb-dev/techops-public
 
 go 1.27
 

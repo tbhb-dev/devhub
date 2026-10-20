@@ -1,4 +1,4 @@
-# Python toolchain configuration. devhub is primarily Go and TypeScript;
+# Python toolchain configuration. techops-public is primarily Go and TypeScript;
 # this file is the uv workspace root that owns the shared Python gate
 # configuration. `package = false` keeps the root virtual: uv syncs the
 # dependency groups and any workspace members into .venv without trying to
@@ -6,10 +6,10 @@
 # gates that need code to measure (complexipy, vulture, pylint duplicate
 # detection, bandit, cosmic-ray, hypofuzz).
 [project]
-name = "devhub-workspace"
+name = "techops-workspace"
 # Inert. Nothing builds or publishes from this table.
 version = "0"
-description = "Workspace root for the devhub Python tooling and packages"
+description = "Workspace root for the techops-public Python tooling and packages"
 requires-python = ">=3.14"
 dependencies = []
 

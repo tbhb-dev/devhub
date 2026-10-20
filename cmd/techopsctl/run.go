@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tbhb-dev/devhub/internal/buildmeta"
+	"github.com/tbhb-dev/techops-public/internal/buildmeta"
 )
 
 // Exit statuses.
@@ -32,7 +32,7 @@ func Run(args []string, s streams) int {
 	cmd.SetArgs(args)
 
 	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(s.err, "devhubctl:", err)
+		fmt.Fprintln(s.err, "techopsctl:", err)
 		return exitError
 	}
 	return exitOK
@@ -40,8 +40,8 @@ func Run(args []string, s streams) int {
 
 func newRootCmd(s streams) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "devhubctl",
-		Short:         "The devhub command-line tool",
+		Use:           "techopsctl",
+		Short:         "The techops command-line tool",
 		Version:       buildmeta.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -61,7 +61,7 @@ func newVersionCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := buildmeta.Get()
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "devhubctl %s\ncommit: %s\ndate:   %s\n",
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "techopsctl %s\ncommit: %s\ndate:   %s\n",
 				info.Version, info.Commit, info.Date)
 			if err != nil {
 				return fmt.Errorf("write version: %w", err)

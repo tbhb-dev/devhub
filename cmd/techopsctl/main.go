@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Tony Burns
 
-// Command devhubctl is the devhub command-line tool.
+// Command techopsctl is the techops command-line tool.
 //
 // See Run in run.go.
 package main

@@ -1,6 +1,6 @@
 ---
 # The shape of the private group_vars, with placeholder values.
-devhub_ssh_key_files:
+techops_ssh_key_files:
   ops-ro: ~/.ssh/example-ops-ro
   ops: ~/.ssh/example-ops.pub
 ops_accounts_ro_keys:

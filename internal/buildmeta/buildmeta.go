@@ -14,7 +14,7 @@ import "runtime/debug"
 const devFallback = "DEV"
 
 // Build-time variables. The mise build task sets these via
-// -ldflags "-X github.com/tbhb-dev/devhub/internal/buildmeta.<Var>=<value>"
+// -ldflags "-X github.com/tbhb-dev/techops-public/internal/buildmeta.<Var>=<value>"
 // at link time. The defaults below apply when the build passes no ldflags.
 //
 //nolint:gochecknoglobals // ldflags -X can only patch package-level vars

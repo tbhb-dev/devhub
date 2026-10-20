@@ -1,4 +1,4 @@
-# Devhub
+# Techops
 
 A monorepo of services for [devtools](https://github.com/tbhb-dev/devtools), written in Go, Python, and TypeScript and orchestrated by nx on top of mise.
 

@@ -275,7 +275,7 @@ run = 'CGO_ENABLED=0 go install -trimpath -buildvcs=false -ldflags "$(bash .devt
 # rejects the trailing ones: without it every invocation argument
 # arrives as a shell positional in a shebang body.
 [tasks.run]
-description = "Run one binary by name, e.g. `mise run run devhubctl version`"
+description = "Run one binary by name, e.g. `mise run run techopsctl version`"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
@@ -648,7 +648,7 @@ uv export --quiet --all-groups --format pylock.toml --no-emit-project -o "$work/
 uv run pip-audit --cache-dir "$work/cache" --locked "$work"
 '''
 
-# --- Ansible tasks (upstream candidate: noted in the devhub Ansible program) ---
+# --- Ansible tasks (upstream candidate: noted in the Ansible program) ---
 # The toolchain is the uv `ops` group, and the collections pinned in
 # infra/ansible/requirements.yml install into the gitignored
 # infra/ansible/.collections. lint-ansible and test-ansible touch no real

@@ -19,4 +19,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 # A container can't load kernel modules.
 RUN systemctl mask systemd-modules-load.service
 
+# The test container has no virtual console for a login prompt.
+RUN systemctl mask getty@tty1.service
+
 CMD ["/sbin/init"]

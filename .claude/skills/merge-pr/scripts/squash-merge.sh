@@ -114,7 +114,7 @@ printf 'drafted for #%s\n' "$number"
 view=$state/merge.view.json
 read_live() {
   mp_view "$number" "$view" \
-    state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefName,baseRefName,headRefOid,isCrossRepository,statusCheckRollup,labels,reviews || exit $?
+    "$MA_GATE_FIELDS,reviewDecision,headRefName,isCrossRepository" || exit $?
   head_oid=$(mp_field "$view" headRefOid)
   base_ref=$(mp_field "$view" baseRefName)
   base_oid=$(mp_base_oid "$base_ref") || exit $?
@@ -227,7 +227,7 @@ if [ "${DT_UNATTENDED:-0}" != 1 ]; then
   mise task info lint-squash-msg >/dev/null 2>&1 ||
     die "mise run lint-squash-msg is absent; the squash-message gate cannot run."
 fi
-ma_lint ||
+ma_lint "$reviewed_head" ||
   die "the squash message fails the commit-msg gates. Fix it, review it again, retry."
 commit-lint --rules trailers --require-assisted-from "$base_oid..$reviewed_head" "$SQUASH_DRAFT" ||
   die "the squash message lacks attribution required by the commits it collapses. Fix it, review it again, retry."

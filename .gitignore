@@ -25,9 +25,10 @@ __pycache__/
 # APM dependencies
 apm_modules/
 
-# Secrets and local overrides. mise.local.toml carries the private values;
-# only mise.local.toml.example is tracked.
-mise.local.toml
+# Secrets and local overrides, including backups and copies of mise.local.toml.
+# Only mise.local.toml.example is tracked.
+mise.local.toml*
+!mise.local.toml.example
 .env
 .env.*
 !.env.example

@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tbhb-dev/devhub/internal/buildmeta"
+	"github.com/tbhb-dev/techops-public/internal/buildmeta"
 )
 
 type harness struct {
@@ -37,7 +37,7 @@ func TestVersionCommand(t *testing.T) {
 
 	got := exec("version")
 	info := buildmeta.Get()
-	want := "devhubctl " + info.Version + "\ncommit: " + info.Commit + "\ndate:   " + info.Date + "\n"
+	want := "techopsctl " + info.Version + "\ncommit: " + info.Commit + "\ndate:   " + info.Date + "\n"
 	assert.Equal(t, exitOK, got.code)
 	assert.Equal(t, want, got.stdout)
 	assert.Empty(t, got.stderr)
@@ -57,7 +57,7 @@ func TestUnknownCommandFails(t *testing.T) {
 	got := exec("nonsense")
 	assert.Equal(t, exitError, got.code)
 	assert.Empty(t, got.stdout)
-	assert.Contains(t, got.stderr, "devhubctl: ")
+	assert.Contains(t, got.stderr, "techopsctl: ")
 }
 
 func TestVersionRejectsArguments(t *testing.T) {

@@ -1,4 +1,4 @@
-# Review routing for devhub. GitHub applies the last matching rule, so the
+# Review routing for techops-public. GitHub applies the last matching rule, so the
 # supply-chain rules below override the default for the paths they name.
 
 # Default owner for everything.

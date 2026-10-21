@@ -17,27 +17,27 @@ teardown() {
   [[ $output == usage:* ]]
 }
 
-@test "verify refuses without DEVHUB_PRIVATE_DIR" {
-  DEVHUB_PRIVATE_DIR='' run bash "$script" verify
+@test "verify refuses without TECHOPS_INTERNAL_DIR" {
+  TECHOPS_INTERNAL_DIR='' run bash "$script" verify
   [ "$status" -eq 1 ]
-  [[ $output == *"ops:verify: DEVHUB_PRIVATE_DIR is unset"* ]]
+  [[ $output == *"ops:verify: TECHOPS_INTERNAL_DIR is unset"* ]]
 }
 
-@test "check refuses without DEVHUB_PRIVATE_DIR" {
-  DEVHUB_PRIVATE_DIR='' run bash "$script" check
+@test "check refuses without TECHOPS_INTERNAL_DIR" {
+  TECHOPS_INTERNAL_DIR='' run bash "$script" check
   [ "$status" -eq 1 ]
-  [[ $output == *"ops:check: DEVHUB_PRIVATE_DIR is unset"* ]]
+  [[ $output == *"ops:check: TECHOPS_INTERNAL_DIR is unset"* ]]
 }
 
 @test "check refuses a private directory with no inventory, without naming it" {
-  DEVHUB_PRIVATE_DIR=$empty run bash "$script" check
+  TECHOPS_INTERNAL_DIR=$empty run bash "$script" check
   [ "$status" -eq 1 ]
-  [[ $output == *"DEVHUB_PRIVATE_DIR has no ansible/inventory directory"* ]]
+  [[ $output == *"TECHOPS_INTERNAL_DIR has no ansible/inventory directory"* ]]
   [[ $output != *"$empty"* ]]
 }
 
 @test "apply refuses without a terminal, whatever the private directory" {
-  DEVHUB_PRIVATE_DIR=$empty run bash "$script" apply </dev/null
+  TECHOPS_INTERNAL_DIR=$empty run bash "$script" apply </dev/null
   [ "$status" -eq 1 ]
   [[ $output == *"operator-only until tbhb-dev/devtools#165"* ]]
   [[ $output == *"no terminal"* ]]

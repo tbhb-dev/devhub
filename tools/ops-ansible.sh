@@ -3,7 +3,7 @@
 # tasks.
 #
 # Both inventories go in: infra/ansible/inventory with the aliases, and
-# $DEVHUB_PRIVATE_DIR/ansible/inventory with the connection variables.
+# $TECHOPS_INTERNAL_DIR/ansible/inventory with the connection variables.
 # The remote account follows from the mode:
 #
 #   verify   ops-ro, playbooks/verify.yml, no become
@@ -14,7 +14,7 @@
 # check and apply take --root for the first apply, before ops exists.
 # A root run passes no key file and uses the operator's own root key.
 #
-# For ops-ro and ops the key file comes from devhub_ssh_key_files[<user>]
+# For ops-ro and ops the key file comes from techops_ssh_key_files[<user>]
 # in the private group_vars and goes in with IdentitiesOnly=yes. ops-ro also gets IdentityAgent=none, so a read-only
 # run never reaches the agent that holds the ops key. Runs as ops or root
 # turn connection reuse off, so one approved connection can't serve later
@@ -54,13 +54,13 @@ if [[ $mode == apply ]]; then
   fi
 fi
 
-if [[ -z ${DEVHUB_PRIVATE_DIR:-} ]]; then
-  echo "ops:$mode: DEVHUB_PRIVATE_DIR is unset; set it in mise.local.toml to the devhub-private checkout" >&2
+if [[ -z ${TECHOPS_INTERNAL_DIR:-} ]]; then
+  echo "ops:$mode: TECHOPS_INTERNAL_DIR is unset; set it in mise.local.toml to the techops-internal checkout" >&2
   exit 1
 fi
-private_inventory=$DEVHUB_PRIVATE_DIR/ansible/inventory
+private_inventory=$TECHOPS_INTERNAL_DIR/ansible/inventory
 if [[ ! -d $private_inventory ]]; then
-  echo "ops:$mode: DEVHUB_PRIVATE_DIR has no ansible/inventory directory" >&2
+  echo "ops:$mode: TECHOPS_INTERNAL_DIR has no ansible/inventory directory" >&2
   exit 1
 fi
 
@@ -107,9 +107,9 @@ esac
 key=
 if [[ $user != root ]]; then
   key=$(uv run --group ops ansible-inventory "${inventories[@]}" --list |
-    jq -r --arg u "$user" '[._meta.hostvars[] | .devhub_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
+    jq -r --arg u "$user" '[._meta.hostvars[] | .techops_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
   if [[ -z $key ]]; then
-    echo "ops:$mode: the private inventory has no single devhub_ssh_key_files entry for $user" >&2
+    echo "ops:$mode: the private inventory has no single techops_ssh_key_files entry for $user" >&2
     exit 1
   fi
   # shellcheck disable=SC2088 # matches the literal tilde YAML carries
@@ -117,7 +117,7 @@ if [[ $user != root ]]; then
     key=$HOME/${key#"~/"}
   fi
   if [[ ! -f $key ]]; then
-    echo "ops:$mode: the key file devhub_ssh_key_files names for $user does not exist" >&2
+    echo "ops:$mode: the key file techops_ssh_key_files names for $user does not exist" >&2
     exit 1
   fi
 fi

@@ -470,51 +470,6 @@ wheels = [
 ]
 
 [[package]]
-name = "devhub-workspace"
-version = "0"
-source = { virtual = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "pip-audit" },
-    { name = "pyrefly" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-ops = [
-    { name = "ansible-core" },
-    { name = "ansible-lint" },
-    { name = "molecule" },
-    { name = "molecule-plugins", extra = ["docker"] },
-]
-test = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pip-audit", specifier = ">=2.10.1" },
-    { name = "pyrefly", specifier = ">=1.0.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.15.17" },
-]
-ops = [
-    { name = "ansible-core", specifier = "==2.21.4" },
-    { name = "ansible-lint", specifier = "==26.9.0" },
-    { name = "molecule", specifier = "==26.9.0" },
-    { name = "molecule-plugins", extras = ["docker"], specifier = "==26.9.28" },
-]
-test = [
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1254,6 +1209,51 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d7/22/991efbf35bc811dfe7edcd749253f0931d2d4838cf55176132633e1c82a7/subprocess_tee-0.4.2.tar.gz", hash = "sha256:91b2b4da3aae9a7088d84acaf2ea0abee3f4fd9c0d2eae69a9b9122a71476590", size = 14951, upload-time = "2024-06-17T19:51:51.249Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/ab/e3a3be062cd544b2803760ff707dee38f0b1cb5685b2446de0ec19be28d9/subprocess_tee-0.4.2-py3-none-any.whl", hash = "sha256:21942e976715af4a19a526918adb03a8a27a8edab959f2d075b777e3d78f532d", size = 5249, upload-time = "2024-06-17T19:51:15.949Z" },
+]
+
+[[package]]
+name = "techops-workspace"
+version = "0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "pip-audit" },
+    { name = "pyrefly" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+ops = [
+    { name = "ansible-core" },
+    { name = "ansible-lint" },
+    { name = "molecule" },
+    { name = "molecule-plugins", extra = ["docker"] },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pip-audit", specifier = ">=2.10.1" },
+    { name = "pyrefly", specifier = ">=1.0.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.15.17" },
+]
+ops = [
+    { name = "ansible-core", specifier = "==2.21.4" },
+    { name = "ansible-lint", specifier = "==26.9.0" },
+    { name = "molecule", specifier = "==26.9.0" },
+    { name = "molecule-plugins", extras = ["docker"], specifier = "==26.9.28" },
+]
+test = [
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
 ]
 
 [[package]]

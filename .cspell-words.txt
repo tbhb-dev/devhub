@@ -69,6 +69,8 @@ slotsdir
 stretchr
 tailnet
 tbhb
+techops
+techopsctl
 testcoverage
 testdata
 testpaths

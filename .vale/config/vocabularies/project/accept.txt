@@ -16,7 +16,8 @@ rulesets?
 [Dd]evhub
 monorepo
 nx
-devhubctl
+[Tt]echops
+techopsctl
 govulncheck
 deadcode
 gomodscan

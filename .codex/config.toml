@@ -5,18 +5,18 @@
 
 # Codex's sandbox for this repository: the workspace plus agent worktrees,
 # git metadata, and GitHub.
-default_permissions = "devhub"
+default_permissions = "techops"
 
-[permissions.devhub]
+[permissions.techops]
 extends = ":workspace"
 
-[permissions.devhub.filesystem.":workspace_roots"]
+[permissions.techops.filesystem.":workspace_roots"]
 ".codex/worktrees" = "write"
 ".git" = "write"
 
-[permissions.devhub.network]
+[permissions.techops.network]
 enabled = true
 
-[permissions.devhub.network.domains]
+[permissions.techops.network.domains]
 "api.github.com" = "allow"
 "github.com" = "allow"

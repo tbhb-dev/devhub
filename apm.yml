@@ -5,9 +5,9 @@
 # devtools:update-pins and devtools:check-pins only understand that shape.
 # Move it with `mise run devtools:update-pins <version>`, and redeploy with
 # `mise run apm-sync`, not a bare `apm install`.
-name: devhub
+name: techops
 version: 0.1.0
-description: APM consumer manifest for devhub
+description: APM consumer manifest for techops-public
 target:
   - claude
   - codex

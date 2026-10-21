@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository. This file is the canon
 
 ## Scope
 
-devhub is a monorepo of services for devtools, written in Go, Python, and TypeScript. The Go code is one root module, `github.com/tbhb-dev/devhub`: `cmd/devhubctl` is the command-line entry point, `internal/` holds private packages, and `apps/` and `packages/` hold the web and service apps and the shared TypeScript and Python packages. `tools/` holds the toolchain scripts. nx wraps mise: the devtools contract stays `mise run ...`, and an nx target in a `project.json` calls `mise run` or the underlying `go`, `uv` or `pnpm` command, which buys caching and `nx affected`. nx never connects to a cloud workspace.
+techops-public is a monorepo of services for devtools, written in Go, Python, and TypeScript. The Go code is one root module, `github.com/tbhb-dev/techops-public`: `cmd/techopsctl` is the command-line entry point, `internal/` holds private packages, and `apps/` and `packages/` hold the web and service apps and the shared TypeScript and Python packages. `tools/` holds the toolchain scripts. nx wraps mise: the devtools contract stays `mise run ...`, and an nx target in a `project.json` calls `mise run` or the underlying `go`, `uv` or `pnpm` command, which buys caching and `nx affected`. nx never connects to a cloud workspace.
 
 ## Public repository
 
@@ -23,7 +23,7 @@ The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Cla
 
 ## Operations
 
-`infra/ansible/` holds the Ansible tree for host-level operations, and every run reads two inventories. Hosts appear there only as aliases such as `edge-1`, and the inventory in this repository sets groups and defaults that identify nothing. The private companion repository, cloned beside this one, stores the second inventory. That inventory maps each alias to its real host and pins `known_hosts`. Its variables add the authorized public keys and `devhub_ssh_key_files`, which gives the key file for each remote account. Each `ops:*` task finds the private one through `DEVHUB_PRIVATE_DIR` in `mise.local.toml`. Without it, the task stops. mise reads every `mise.local.toml` from the working directory up, so a worktree inside this checkout still sets the variable. To see the refusal, run `DEVHUB_PRIVATE_DIR= bash tools/ops-ansible.sh verify` directly, never `mise run ops:verify`.
+`infra/ansible/` holds the Ansible tree for host-level operations, and every run reads two inventories. Hosts appear there only as aliases such as `edge-1`, and the inventory in this repository sets groups and defaults that identify nothing. The private companion repository, cloned beside this one, stores the second inventory. That inventory maps each alias to its real host and pins `known_hosts`. Its variables add the authorized public keys and `techops_ssh_key_files`, which gives the key file for each remote account. Each `ops:*` task finds the private one through `TECHOPS_INTERNAL_DIR` in `mise.local.toml`. Without it, the task stops. mise reads every `mise.local.toml` from the working directory up, so a worktree inside this checkout still sets the variable. To see the refusal, run `TECHOPS_INTERNAL_DIR= bash tools/ops-ansible.sh verify` directly, never `mise run ops:verify`.
 
 Use the alias for a host everywhere in this repository and its history. Only the operator edits the private repository. An agent keeps every real host name, address, tailnet name, key, fingerprint, and console URL out of what it writes.
 

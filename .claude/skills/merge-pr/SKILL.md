@@ -118,29 +118,33 @@ Read those lines, then check the `Closes` lines that remain against the branch. 
 Fix the prose findings with the `fix-prose` skill first, passing the draft and the task that judges it:
 
 ```text
-Skill(fix-prose, args: "SQUASH_AGENTMSG mise run lint-squash-msg")
+Skill(fix-prose, args: "SQUASH_AGENTMSG bash .claude/skills/merge-pr/scripts/lint-squash-msg.sh <number>")
 ```
 
-Then run the task yourself:
+Then run the wrapper yourself:
 
 ```text
-mise run lint-squash-msg
+bash .claude/skills/merge-pr/scripts/lint-squash-msg.sh <number>
 ```
 
-The same four hooks a commit must pass, plus the source-range identity context that requires `Assisted-by` when the squash collapses an agent commit:
+The workflow wrapper runs the repository's configured `lint-squash-msg` task with the cspell configuration and word list read from the pull request head. It never reads those files from the operator's checkout.
+
+The gate runs the commit hooks along with the source-range identity context that requires `Assisted-by` when the squash collapses an agent commit:
 
 - vale under the commit scope, which catches AI tells through `ai-tells-commits`
 - cspell with the commit dictionary
 - commitlint for the Conventional Commits shape
 - commit-trailers for trailer order
 
-Order matters here. The review in the next step stamps the exact bytes it read, so a lint fix after it voids the stamp and costs another review round over a comma. The merge script runs this task again before it merges, and refuses when the task is absent rather than skipping it.
+Order matters here. The review in the next step stamps the exact bytes it read, so a lint fix after it voids the stamp and costs another review round over a comma. Before merging, the script runs this task again and refuses when the task is absent rather than skipping it.
 
 ## Step 5: review the message
 
 ```text
 bash .claude/skills/merge-pr/scripts/review.sh <number>
 ```
+
+In auto mode, the operator can add `Bash(bash .claude/skills/merge-pr/scripts/review.sh *)` to `permissions.allow` in their Claude Code settings after agreeing to the review. The unattended wrapper is `Bash(bash .claude/skills/agent-merge-pr/scripts/review.sh *)`. Both current scripts accept a pull request number and `--note`, but no `--unblock` flag. An owner adds these permissions, never the agent.
 
 Pass `--note <file>` to include a decision the operator actually made, with the operator's reason. Never use it for the agent's own preference.
 
@@ -153,13 +157,22 @@ This step is mandatory, and the merge script enforces it.
 | 0 | Passed and stamped |
 | 75 | Waiting for an approving review GitHub requires |
 | 2 | Changes required: the output lists the findings |
+| 3 | The reviewer rejected the same draft for this pull request head. Change it or ask the operator |
 | 4 | The reviewer failed or replied without a readable verdict |
 | 124 | The reviewer timed out without a stamp |
 | 5 | The draft or the pull request moved while the review ran |
 
 Fix everything it returns and run it again. Push back only where it's demonstrably wrong about the commits, and say why.
 
+The script records every readable verdict with the draft digest and pull request head. After `CHANGES REQUIRED`, it refuses to send byte-identical text for the same head to another reviewer. The reviewer can read a changed draft.
+
 A finding cites one instance rather than the fault itself. Fix the instance, then read the rest of the message for the same fault.
+
+`review_cmd` chooses the reviewer. It isn't only a label. From Codex, configure a reviewer that the session may start. These repository machines use `agy` in read-only plan mode through this line in `~/.config/devtools/devtools.conf`:
+
+```text
+review_cmd = agy -p "$(cat)" --mode plan --add-dir "$DEVTOOLS_REVIEW_INPUTS" --print-timeout 900s
+```
 
 `DEVTOOLS_REVIEW_CMD`, `DEVTOOLS_REVIEW_MODEL`, and `DEVTOOLS_REVIEW_EFFORT`, or the same keys in `~/.config/devtools/<repository>.conf`, replace the default reviewer. No repository file can, so a branch never chooses who reviews its own merge.
 

@@ -6,6 +6,7 @@ devtools-agents-claude .claude/skills/agent-commit/scripts/review.sh
 devtools-agents-claude .claude/skills/agent-commit/tokens.json
 devtools-agents-claude .claude/skills/agent-merge-pr
 devtools-agents-claude .claude/skills/agent-merge-pr/SKILL.md
+devtools-agents-claude .claude/skills/agent-merge-pr/scripts/lint-squash-msg.sh
 devtools-agents-claude .claude/skills/agent-merge-pr/scripts/merge.sh
 devtools-agents-claude .claude/skills/agent-merge-pr/scripts/preflight.sh
 devtools-agents-claude .claude/skills/agent-merge-pr/scripts/review.sh
@@ -46,6 +47,7 @@ devtools-agents-claude .claude/skills/commit/scripts/lib.sh
 devtools-agents-claude .claude/skills/commit/scripts/preflight.sh
 devtools-agents-claude .claude/skills/commit/scripts/review.sh
 devtools-agents-claude .claude/skills/commit/scripts/signing.sh
+devtools-agents-claude .claude/skills/commit/scripts/worktree-ready.sh
 devtools-agents-claude .claude/skills/commit/tokens.json
 devtools-agents-claude .claude/skills/fix-pr
 devtools-agents-claude .claude/skills/fix-pr/SKILL.md
@@ -67,6 +69,7 @@ devtools-agents-claude .claude/skills/merge-pr/scripts/agent.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/gates.py
 devtools-agents-claude .claude/skills/merge-pr/scripts/guard-merge.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/lib.sh
+devtools-agents-claude .claude/skills/merge-pr/scripts/lint-squash-msg.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/merge-agent.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/merge-policy.py
 devtools-agents-claude .claude/skills/merge-pr/scripts/populate-description.sh
@@ -76,6 +79,7 @@ devtools-agents-claude .claude/skills/merge-pr/scripts/review.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/signing.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/squash-merge.sh
 devtools-agents-claude .claude/skills/merge-pr/scripts/squash-message.sh
+devtools-agents-claude .claude/skills/merge-pr/scripts/worktree-ready.sh
 devtools-agents-claude .claude/skills/merge-pr/tokens.json
 devtools-agents-claude .claude/skills/pr
 devtools-agents-claude .claude/skills/pr/SKILL.md
@@ -95,6 +99,7 @@ devtools-agents-claude .claude/skills/pr/scripts/review.sh
 devtools-agents-claude .claude/skills/pr/scripts/scaffold-description.sh
 devtools-agents-claude .claude/skills/pr/scripts/signing.sh
 devtools-agents-claude .claude/skills/pr/scripts/validate-description.sh
+devtools-agents-claude .claude/skills/pr/scripts/worktree-ready.sh
 devtools-agents-claude .claude/skills/pr/tokens.json
 devtools-agents-claude .claude/skills/rebase
 devtools-agents-claude .claude/skills/rebase/SKILL.md
@@ -105,6 +110,7 @@ devtools-agents-claude .claude/skills/rebase/scripts/preflight.sh
 devtools-agents-claude .claude/skills/rebase/scripts/rebase-status.sh
 devtools-agents-claude .claude/skills/rebase/scripts/start-rebase.sh
 devtools-agents-claude .claude/skills/rebase/scripts/verify-rebase.sh
+devtools-agents-claude .claude/skills/rebase/scripts/worktree-ready.sh
 devtools-agents-claude .claude/skills/rebase/tokens.json
 devtools-agents-claude .claude/skills/resolve-rebase-conflicts
 devtools-agents-claude .claude/skills/resolve-rebase-conflicts/SKILL.md
@@ -151,6 +157,7 @@ devtools-agents-codex .agents/skills/agent-commit/scripts/review.sh
 devtools-agents-codex .agents/skills/agent-commit/tokens.json
 devtools-agents-codex .agents/skills/agent-merge-pr
 devtools-agents-codex .agents/skills/agent-merge-pr/SKILL.md
+devtools-agents-codex .agents/skills/agent-merge-pr/scripts/lint-squash-msg.sh
 devtools-agents-codex .agents/skills/agent-merge-pr/scripts/merge.sh
 devtools-agents-codex .agents/skills/agent-merge-pr/scripts/preflight.sh
 devtools-agents-codex .agents/skills/agent-merge-pr/scripts/review.sh
@@ -190,6 +197,7 @@ devtools-agents-codex .agents/skills/commit/scripts/lib.sh
 devtools-agents-codex .agents/skills/commit/scripts/preflight.sh
 devtools-agents-codex .agents/skills/commit/scripts/review.sh
 devtools-agents-codex .agents/skills/commit/scripts/signing.sh
+devtools-agents-codex .agents/skills/commit/scripts/worktree-ready.sh
 devtools-agents-codex .agents/skills/commit/tokens.json
 devtools-agents-codex .agents/skills/fix-pr
 devtools-agents-codex .agents/skills/fix-pr/SKILL.md
@@ -206,6 +214,7 @@ devtools-agents-codex .agents/skills/merge-pr/SKILL.md
 devtools-agents-codex .agents/skills/merge-pr/scripts/agent.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/gates.py
 devtools-agents-codex .agents/skills/merge-pr/scripts/lib.sh
+devtools-agents-codex .agents/skills/merge-pr/scripts/lint-squash-msg.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/merge-agent.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/merge-policy.py
 devtools-agents-codex .agents/skills/merge-pr/scripts/populate-description.sh
@@ -215,6 +224,7 @@ devtools-agents-codex .agents/skills/merge-pr/scripts/review.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/signing.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/squash-merge.sh
 devtools-agents-codex .agents/skills/merge-pr/scripts/squash-message.sh
+devtools-agents-codex .agents/skills/merge-pr/scripts/worktree-ready.sh
 devtools-agents-codex .agents/skills/merge-pr/tokens.json
 devtools-agents-codex .agents/skills/pr
 devtools-agents-codex .agents/skills/pr/SKILL.md
@@ -233,6 +243,7 @@ devtools-agents-codex .agents/skills/pr/scripts/review.sh
 devtools-agents-codex .agents/skills/pr/scripts/scaffold-description.sh
 devtools-agents-codex .agents/skills/pr/scripts/signing.sh
 devtools-agents-codex .agents/skills/pr/scripts/validate-description.sh
+devtools-agents-codex .agents/skills/pr/scripts/worktree-ready.sh
 devtools-agents-codex .agents/skills/pr/tokens.json
 devtools-agents-codex .agents/skills/rebase
 devtools-agents-codex .agents/skills/rebase/SKILL.md
@@ -242,6 +253,7 @@ devtools-agents-codex .agents/skills/rebase/scripts/preflight.sh
 devtools-agents-codex .agents/skills/rebase/scripts/rebase-status.sh
 devtools-agents-codex .agents/skills/rebase/scripts/start-rebase.sh
 devtools-agents-codex .agents/skills/rebase/scripts/verify-rebase.sh
+devtools-agents-codex .agents/skills/rebase/scripts/worktree-ready.sh
 devtools-agents-codex .agents/skills/rebase/tokens.json
 devtools-agents-codex .agents/skills/resolve-rebase-conflicts
 devtools-agents-codex .agents/skills/resolve-rebase-conflicts/SKILL.md

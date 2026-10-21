@@ -39,6 +39,7 @@ none() { printf '(none)\n'; }
 
 root=$(dt_root)
 cd "$root"
+bash "$(dirname "${BASH_SOURCE[0]}")/worktree-ready.sh"
 ma_context
 
 section "gh"
@@ -76,7 +77,7 @@ printf 'pull request: #%s\n' "$number"
 
 view=$(dt_state_dir)/merge-preflight.json
 mp_view "$number" "$view" \
-  number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,statusCheckRollup,commits,body,files,labels,reviews || exit $?
+  "$MA_GATE_FIELDS,number,title,author,headRefName,isCrossRepository,reviewDecision,url,commits,body,files" || exit $?
 
 section "state"
 jq -r '

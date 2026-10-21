@@ -5,7 +5,8 @@
 setup() {
   root=$(git -C "$BATS_TEST_DIRNAME" rev-parse --show-toplevel)
   cd "$root" || exit 1
-  work=$(mktemp -d)
+  mkdir -p "$root/tmp"
+  work=$(mktemp -d "$root/tmp/fix-prose-replacements.XXXXXX")
   mkdir "$work/bin"
   printf 'Some text.\n' >"$work/draft.md"
   PATH="$work/bin:$PATH"

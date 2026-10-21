@@ -6,6 +6,10 @@ unset CDPATH GH_REPO GH_HOST GREP_OPTIONS
 IFS=$' \t\n'
 set -o pipefail
 
+# Every snapshot passed to ma_gates must request this complete set. The gate
+# reads some fields directly and the rest through ma_approved and agentrepo.
+readonly MA_GATE_FIELDS=state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,reviews,statusCheckRollup
+
 ma_context() {
   [ "${DT_UNATTENDED:-0}" = 1 ] || return 0
   dt_agent_context || return $?
@@ -16,17 +20,42 @@ ma_context() {
   [ -n "$login" ] || dt_die "gh_login must be configured on the machine"
   command -v uv >/dev/null || dt_die "uv is required for the YAML policy reader"
   command -v agentrepo >/dev/null || dt_die "agentrepo is required for check judgement"
+  agentrepo --help >/dev/null 2>&1 || dt_die "a working agentrepo is required for check judgement"
 }
 
 ma_lint() {
-  local cmd
-  if [ "${DT_UNATTENDED:-0}" = 1 ]; then
-    cmd=$(dt_repo_conf lint_squash_cmd 'mise run lint-squash-msg') || return $?
-    [ -n "$cmd" ] || dt_die "lint_squash_cmd must not be empty"
-    bash -c "$cmd"
-  else
-    mise run lint-squash-msg
+  local head=$1 cmd config tmp status
+  mp_fetch_commit "$head" || return $?
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/devtools-squash-cspell.XXXXXX") || return $?
+  config=$tmp/.cspell.jsonc
+  if ! gitr show "$head:.cspell.jsonc" >"$config"; then
+    rm -rf -- "$tmp"
+    dt_die "Could not read .cspell.jsonc from the pull request head."
+    return 1
   fi
+  if gitr cat-file -e "$head:.cspell-words.txt" 2>/dev/null; then
+    if ! gitr show "$head:.cspell-words.txt" >"$tmp/.cspell-words.txt"; then
+      rm -rf -- "$tmp"
+      dt_die "Could not read .cspell-words.txt from the pull request head."
+      return 1
+    fi
+  fi
+  status=0
+  if [ "${DT_UNATTENDED:-0}" = 1 ]; then
+    cmd=$(dt_repo_conf lint_squash_cmd 'mise run lint-squash-msg') || status=$?
+    if [ "$status" -eq 0 ] && [ -z "$cmd" ]; then
+      rm -rf -- "$tmp"
+      dt_die "lint_squash_cmd must not be empty"
+      return 1
+    fi
+    if [ "$status" -eq 0 ]; then
+      DEVTOOLS_CSPELL_CONFIG="$config" bash -c "$cmd" || status=$?
+    fi
+  else
+    DEVTOOLS_CSPELL_CONFIG="$config" mise run lint-squash-msg || status=$?
+  fi
+  rm -rf -- "$tmp"
+  return "$status"
 }
 
 ma_policy() { uv run --quiet --script "$DT_LIB_DIR/merge-policy.py" "$@"; }

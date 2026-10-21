@@ -144,7 +144,7 @@ run = [
   "mise run devtools:lint-apm",
   "mise run lint-apm-deploy",
   "mise run lint-go-all",
-  "mise run lint-py-all",
+  # Restore Python lint when first-party Python lands or devtools v0.14.1 skips empty trees.
   "mise run lock-check",
   "mise run lint-prose",
   "mise run devtools:lint-spelling",

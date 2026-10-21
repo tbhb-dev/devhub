@@ -301,7 +301,7 @@ package = false
 # mise pins uv in [tools], but that pin binds only where mise resolves
 # PATH. This floor is uv refusing to run rather than uv.lock churning when
 # a resolver from another minor line rewrites it. Move it with the mise pin.
-required-version = ">=0.12.1,<0.13"
+required-version = ">=0.13.1,<0.14"
 
 [tool.uv.workspace]
 # Members arrive with apps/ and packages/ content; both directories are

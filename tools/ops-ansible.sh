@@ -11,12 +11,9 @@
 #   apply    ops; refused without a terminal, because only the operator
 #            runs it until tbhb-dev/devtools#165 lands
 #
-# check and apply take --root for the first apply, before ops exists.
-# A root run passes no key file and uses the operator's own root key.
-#
 # For ops-ro and ops the key file comes from techops_ssh_key_files[<user>]
 # in the private group_vars and goes in with IdentitiesOnly=yes. ops-ro also gets IdentityAgent=none, so a read-only
-# run never reaches the agent that holds the ops key. Runs as ops or root
+# run never reaches the agent that holds the ops key. Runs as ops
 # turn connection reuse off, so one approved connection can't serve later
 # commands. Every mode sets StrictHostKeyChecking=yes, so a run with no
 # pinned host key stops instead of asking. These options go in
@@ -31,20 +28,25 @@
 #
 # Usage:
 #   ops-ansible.sh verify [ansible-playbook args...]
-#   ops-ansible.sh check|apply [--root] [playbook] [ansible-playbook args...]
+#   ops-ansible.sh check|apply [playbook] [ansible-playbook args...]
 #
 # playbook names a file under infra/ansible/playbooks without .yml and
 # defaults to accounts.
 set -euo pipefail
 
 usage() {
-  echo "usage: ops-ansible.sh verify|check|apply [--root] [playbook] [ansible-playbook args...]" >&2
+  echo "usage: ops-ansible.sh verify|check|apply [playbook] [ansible-playbook args...]" >&2
   exit 2
 }
 
 mode=${1:-}
 [[ $mode == verify || $mode == check || $mode == apply ]] || usage
 shift
+
+# Reject the removed flag before the terminal guard or inventory reads.
+for arg in "$@"; do
+  [[ $arg != --root ]] || usage
+done
 
 if [[ $mode == apply ]]; then
   echo "ops:apply is operator-only until tbhb-dev/devtools#165 lands" >&2
@@ -77,10 +79,6 @@ check)
   ;;
 esac
 if [[ $mode != verify ]]; then
-  if [[ ${1:-} == --root ]]; then
-    user=root
-    shift
-  fi
   if [[ $# -gt 0 && $1 != -* ]]; then
     playbook=$1
     shift
@@ -101,30 +99,24 @@ inventories=(-i inventory -i "$private_inventory")
 case $user in
 ops-ro) ssh_args='-C -o StrictHostKeyChecking=yes -o ControlMaster=auto -o ControlPersist=60s -o IdentitiesOnly=yes -o IdentityAgent=none' ;;
 ops) ssh_args='-C -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPersist=no -o ControlPath=none -o IdentitiesOnly=yes' ;;
-root) ssh_args='-C -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPersist=no -o ControlPath=none' ;;
 esac
 
-key=
-if [[ $user != root ]]; then
-  key=$(uv run --group ops ansible-inventory "${inventories[@]}" --list |
-    jq -r --arg u "$user" '[._meta.hostvars[] | .techops_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
-  if [[ -z $key ]]; then
-    echo "ops:$mode: the private inventory has no single techops_ssh_key_files entry for $user" >&2
-    exit 1
-  fi
-  # shellcheck disable=SC2088 # matches the literal tilde YAML carries
-  if [[ $key == "~/"* ]]; then
-    key=$HOME/${key#"~/"}
-  fi
-  if [[ ! -f $key ]]; then
-    echo "ops:$mode: the key file techops_ssh_key_files names for $user does not exist" >&2
-    exit 1
-  fi
+key=$(uv run --group ops ansible-inventory "${inventories[@]}" --list |
+  jq -r --arg u "$user" '[._meta.hostvars[] | .techops_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
+if [[ -z $key ]]; then
+  echo "ops:$mode: the private inventory has no single techops_ssh_key_files entry for $user" >&2
+  exit 1
+fi
+# shellcheck disable=SC2088 # matches the literal tilde YAML carries
+if [[ $key == "~/"* ]]; then
+  key=$HOME/${key#"~/"}
+fi
+if [[ ! -f $key ]]; then
+  echo "ops:$mode: the key file techops_ssh_key_files names for $user does not exist" >&2
+  exit 1
 fi
 
-# The ssh plugin skips an empty key file, so a root run uses the
-# operator's own key whatever the inventory names. The inline key, which
-# would win over the key file, stays empty for every user.
+# The inline key would win over the key file, so it stays empty.
 extra=$(jq -cn --arg u "$user" --arg a "$ssh_args" --arg k "$key" \
   '{ansible_connection: "ssh", ansible_user: $u, ansible_ssh_args: $a,
     ansible_ssh_private_key_file: $k, ansible_ssh_private_key: ""}')

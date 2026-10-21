@@ -77,11 +77,12 @@ run_ops() {
   [ "$(first StrictHostKeyChecking)" = yes ]
 }
 
-@test "check --root passes no key file and reuses no connection" {
-  run_ops check --root
-  [ "$(first User)" = root ]
-  [ -z "$(first IdentityFile)" ]
-  [ "$(first ControlMaster)" = no ]
-  [ "$(first ControlPath)" = none ]
-  [ "$(first StrictHostKeyChecking)" = yes ]
+@test "check and apply reject --root before reading inventory or invoking ssh" {
+  for mode in check apply; do
+    TECHOPS_INTERNAL_DIR=$work/missing ANSIBLE_SSH_EXECUTABLE=$work/ssh \
+      run bash "$script" "$mode" --root
+    [ "$status" -eq 2 ]
+    [[ $output == usage:* ]]
+    [ ! -f "$work/argv" ]
+  done
 }

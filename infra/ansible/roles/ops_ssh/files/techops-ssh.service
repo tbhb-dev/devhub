@@ -1,0 +1,20 @@
+[Unit]
+Description=Restrict new SSH connections to the tailnet interface
+# Socket units start before basic.target. Avoid a cycle through the
+# default service dependencies while still waiting for the table file.
+DefaultDependencies=no
+After=local-fs.target
+Before=ssh.socket ssh.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/techops-ssh.nft
+ExecReload=/usr/sbin/nft -f /etc/nftables.d/techops-ssh.nft
+ExecStop=-/usr/sbin/nft delete table inet techops_ssh
+
+[Install]
+# Wants also pulls this unit in for socket activation, without stopping
+# SSH when the revert disables and stops the firewall unit.
+WantedBy=multi-user.target ssh.socket ssh.service

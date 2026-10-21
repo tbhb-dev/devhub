@@ -1,0 +1,43 @@
+---
+- name: Harden SSH access
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Prepare the SSH safety switch
+      ansible.builtin.include_role:
+        name: ops_ssh
+        tasks_from: prepare
+        public: true
+
+    # Arming and cancelling leave no persistent state, so this pair
+    # reports unchanged. Configuration and unit tasks report real changes.
+    # An interrupted run is reverted before rearming so handlers fire again.
+    - name: Arm the SSH revert timer
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-ssh-revert arm
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Apply SSH hardening
+      ansible.builtin.include_role:
+        name: ops_ssh
+
+    - name: Apply the SSH handlers before reconnecting
+      ansible.builtin.meta: flush_handlers
+
+    - name: Close the existing connection
+      ansible.builtin.meta: reset_connection
+      when: not ansible_check_mode
+
+    - name: Confirm a fresh login as the connection account
+      ansible.builtin.wait_for_connection:
+        timeout: 60
+      become: false
+      when: not ansible_check_mode
+
+    - name: Cancel the SSH revert timer after the fresh login
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-ssh-revert cancel
+      changed_when: false
+      when: not ansible_check_mode

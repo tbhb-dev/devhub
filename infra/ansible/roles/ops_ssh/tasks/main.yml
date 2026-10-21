@@ -1,0 +1,81 @@
+---
+- name: Validate candidates in check mode
+  ansible.builtin.include_tasks: check.yml
+  when: ansible_check_mode
+
+# The validator creates /run/sshd even before socket activation starts it.
+- name: Install the SSH drop-in
+  ansible.builtin.template:
+    src: sshd.conf.j2
+    dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/sbin/techops-sshd-validate %s
+  notify: Reload SSH
+
+- name: Validate the live SSH drop-in
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/techops-sshd-validate /etc/ssh/sshd_config.d/00-techops-ssh.conf
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Create the firewall configuration directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the SSH firewall table
+  ansible.builtin.template:
+    src: techops-ssh.nft.j2
+    dest: /etc/nftables.d/techops-ssh.nft
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Reload SSH firewall
+
+- name: Install the SSH firewall unit
+  ansible.builtin.copy:
+    src: techops-ssh.service
+    dest: /etc/systemd/system/techops-ssh.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ops_ssh_unit
+  notify: Reload SSH firewall
+
+- name: Create the stock nftables unit override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/nftables.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Prevent the stock nftables service from flushing tables
+  ansible.builtin.copy:
+    src: nftables-override.conf
+    dest: /etc/systemd/system/nftables.service.d/00-techops-ssh.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Stop and disable the stock nftables service
+  ansible.builtin.systemd_service:
+    name: nftables.service
+    daemon_reload: true
+    state: stopped
+    enabled: false
+  when: not (ansible_check_mode and ops_ssh_packages is changed)
+
+- name: Enable and start the SSH firewall
+  ansible.builtin.systemd_service:
+    name: techops-ssh.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not (ansible_check_mode and ops_ssh_unit is changed)

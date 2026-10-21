@@ -667,7 +667,7 @@ depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
 run = [
   "uv run --group ops ansible-lint",
-  "uv run --group ops ansible-playbook --syntax-check -i inventory -i tests/inventory playbooks/accounts.yml playbooks/verify.yml",
+  "uv run --group ops ansible-playbook --syntax-check -i inventory -i tests/inventory playbooks/*.yml",
 ]
 
 # The bats file checks the ssh command line tools/ops-ansible.sh builds,
@@ -675,16 +675,15 @@ run = [
 [tasks.test-ansible]
 description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
 depends = ["install-ansible"]
-dir = "{{config_root}}/infra/ansible/roles/ops_accounts"
+dir = "{{config_root}}/infra/ansible"
 env = { ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
 run = [
   "bats {{config_root}}/tools/ops-ansible-ssh.bats",
-  "uv run --group ops molecule test",
+  "for scenario in roles/*/molecule; do (cd \"${scenario%/molecule}\" && uv run --group ops molecule test) || exit; done",
 ]
 
 # Extra invocation args reach ansible-playbook, e.g. `--limit edge-1`.
-# check and apply also take `--root` and a playbook name first; see the
-# script header.
+# check and apply also take a playbook name first; see the script header.
 [tasks."ops:verify"]
 description = "Run the verify playbook against the real hosts as ops-ro"
 run = "bash tools/ops-ansible.sh verify"

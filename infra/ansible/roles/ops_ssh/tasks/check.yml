@@ -1,0 +1,43 @@
+---
+- name: Validate temporary configurations without installing them
+  block:
+    - name: Create the check mode directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: techops-ssh-check-
+      register: ops_ssh_check
+      check_mode: false
+      changed_when: false
+
+    - name: Render check mode candidates
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ ops_ssh_check.path }}/{{ item }}"
+        mode: "0600"
+      loop: [sshd.conf, techops-ssh.nft]
+      diff: false
+      check_mode: false
+      changed_when: false
+
+    # The installed helper may not exist yet on a first check.
+    - name: Validate the check mode SSH candidate
+      ansible.builtin.script:
+        cmd: techops-sshd-validate.sh {{ ops_ssh_check.path }}/sshd.conf
+      check_mode: false
+      changed_when: false
+
+    - name: Validate the check mode firewall candidate
+      ansible.builtin.command:
+        cmd: /usr/sbin/nft -c -f {{ ops_ssh_check.path }}/techops-ssh.nft
+      check_mode: false
+      changed_when: false
+      # A first check can only validate nft syntax if nft is installed.
+      when: ops_ssh_packages is not changed
+  always:
+    - name: Remove the check mode directory
+      ansible.builtin.file:
+        path: "{{ ops_ssh_check.path }}"
+        state: absent
+      when: ops_ssh_check.path is defined
+      check_mode: false
+      changed_when: false

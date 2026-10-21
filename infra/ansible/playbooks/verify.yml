@@ -54,8 +54,124 @@
       changed_when: false
       failed_when: false
 
+    # ops-ro can inspect files and unit state, but cannot list nftables
+    # tables or run sshd -T. Effective config and rules need the root tests.
+    - name: Read the main SSH configuration
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: verify_ssh_main
+      failed_when: false
+
+    - name: Read the SSH hardening drop-in
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: verify_ssh_drop_in
+      failed_when: false
+
+    - name: List the SSH drop-ins
+      ansible.builtin.find:
+        paths: /etc/ssh/sshd_config.d
+        patterns: "*.conf"
+        file_type: any
+      register: verify_ssh_drop_ins
+      failed_when: false
+
+    - name: Read every SSH drop-in
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ verify_ssh_drop_ins.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: verify_ssh_other_drop_ins
+      failed_when: false
+      # Report file names only, including on a regression.
+      no_log: true
+
+    - name: Initialize conflicting SSH file names
+      ansible.builtin.set_fact:
+        verify_ssh_conflicts: []
+        verify_ssh_unreadable: []
+
+    - name: Record conflicting SSH configuration files
+      vars:
+        verify_ssh_path: "{{ item.source | default(item.item.path | default('/etc/ssh/sshd_config')) }}"
+        verify_ssh_content: "{{ item.content | default('') | b64decode }}"
+        verify_ssh_includes: "{{ verify_ssh_content | regex_findall('(?im)^[ \\t]*Include(?:[ \\t=]+[^\\r\\n]*|$)') }}"
+        verify_ssh_standard_include: '(?i)^[ \t]*Include[ \t]+/etc/ssh/sshd_config\.d/\*\.conf[ \t]*(?:#.*)?$'
+      ansible.builtin.set_fact:
+        verify_ssh_conflicts: >-
+          {{ verify_ssh_conflicts + ([verify_ssh_path] if
+             (verify_ssh_path != '/etc/ssh/sshd_config.d/00-techops-ssh.conf' and
+              verify_ssh_content | regex_search('(?im)^[ \t]*(?:AllowUsers|Match)(?:[ \t=]|$)') is not none)
+             or (verify_ssh_path != '/etc/ssh/sshd_config' and verify_ssh_includes | length > 0)
+             or (verify_ssh_path == '/etc/ssh/sshd_config' and
+                 verify_ssh_includes | reject('match', verify_ssh_standard_include) | list | length > 0)
+             else []) }}
+        verify_ssh_unreadable: >-
+          {{ verify_ssh_unreadable + ([verify_ssh_path] if item.content is not defined else []) }}
+      loop: "{{ verify_ssh_other_drop_ins.results | default([]) + [verify_ssh_main] }}"
+      no_log: true
+
+    - name: Read the SSH firewall state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active techops-ssh.service
+      register: verify_ssh_firewall_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read the SSH firewall boot state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-enabled techops-ssh.service
+      register: verify_ssh_firewall_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the stock nftables boot state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-enabled nftables.service
+      register: verify_nftables_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the stock nftables state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active nftables.service
+      register: verify_nftables_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read the stock nftables override
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/nftables.service.d/00-techops-ssh.conf
+      register: verify_nftables_override
+      failed_when: false
+
+    - name: Look for a pending SSH revert timer
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl list-timers --no-legend --plain techops-ssh-revert.timer
+      register: verify_ssh_revert
+      changed_when: false
+      failed_when: false
+
     - name: Evaluate the checks
       vars:
+        verify_ssh_text: "{{ verify_ssh_drop_in.content | default('') | b64decode }}"
+        verify_ssh_main_text: "{{ verify_ssh_main.content | default('') | b64decode }}"
+        verify_ssh_main_directives: >-
+          {{ verify_ssh_main_text | regex_findall(
+            '(?im)^[ \t]*(?:Include[ \t]+/etc/ssh/sshd_config\.d/\*\.conf[ \t]*(?:#.*)?'
+            ~ '|(?:PermitRootLogin|PasswordAuthentication|KbdInteractiveAuthentication'
+            ~ '|ChallengeResponseAuthentication|AllowUsers)[ \t=]+[^\r\n]*)$') }}
+        verify_ssh_names: >-
+          {{ verify_ssh_drop_ins.files | default([]) | map(attribute='path') | map('basename')
+             | sort(case_sensitive=true) | list }}
+        verify_ssh_values: >-
+          {{ verify_ssh_text.splitlines() | reject('match', '^[ \t]*(?:#|$)') | list }}
+        verify_ssh_expected:
+          - PermitRootLogin no
+          - PasswordAuthentication no
+          - KbdInteractiveAuthentication no
+          - "AllowUsers {{ ops_ssh_allow_users | default(['ops', 'ops-ro']) | join(' ') }}"
         verify_mdstat_text: "{{ verify_mdstat.content | default('') | b64decode }}"
         verify_md_status: "{{ verify_mdstat_text | regex_findall('\\[([U_]+)\\]') }}"
         verify_md_arrays: "{{ verify_mdstat_text | regex_findall('^(md\\d+) :', multiline=true) }}"
@@ -79,6 +195,18 @@
           reboot_required: "{{ verify_reboot_required.stat.exists }}"
           kept_back: "{{ verify_kept_back }}"
           deferred_by_phasing: "{{ verify_deferred }}"
+          ssh_drop_in_readable: "{{ verify_ssh_drop_in.content is defined }}"
+          ssh_main_readable: "{{ verify_ssh_main.content is defined }}"
+          ssh_drop_in_values: "{{ verify_ssh_values }}"
+          ssh_drop_ins: "{{ verify_ssh_names }}"
+          ssh_conflicting_files: "{{ verify_ssh_conflicts }}"
+          ssh_unreadable_files: "{{ verify_ssh_unreadable }}"
+          ssh_firewall_active: "{{ verify_ssh_firewall_active.stdout }}"
+          ssh_firewall_enabled: "{{ verify_ssh_firewall_enabled.stdout }}"
+          nftables_enabled: "{{ verify_nftables_enabled.stdout }}"
+          nftables_active: "{{ verify_nftables_active.stdout }}"
+          nftables_override: "{{ verify_nftables_override.content | default('') | b64decode }}"
+          ssh_revert_timers: "{{ verify_ssh_revert.stdout_lines }}"
         verify_regressions: >-
           {{ (
             ([] if ansible_facts.distribution == verify_os_distribution
@@ -95,6 +223,30 @@
             + ([] if verify_dpkg_audit.stdout_lines | length == 0 else ['dpkg --audit reports problems'])
             + ([] if not verify_reboot_required.stat.exists else ['a reboot is required'])
             + ([] if verify_apt_upgrade.rc == 0 else ['apt-get -s upgrade failed'])
+            + ([] if verify_ssh_drop_in.content is defined else ['SSH hardening drop-in is missing or unreadable'])
+            + ([] if verify_ssh_values == verify_ssh_expected
+                else ['SSH hardening drop-in values differ'])
+            + ([] if verify_ssh_names | first | default('') == '00-techops-ssh.conf'
+                else ['SSH hardening drop-in does not sort first'])
+            + ([] if verify_ssh_conflicts | length == 0 else ['SSH configuration has conflicting directives'])
+            + ([] if verify_ssh_unreadable | length == 0 else ['SSH configuration files are unreadable'])
+            + ([] if verify_ssh_main.content is defined
+                     and (verify_ssh_main_directives | first | default('')
+                          | regex_search('(?i)^[ \t]*Include[ \t]')) is not none
+                else ['SSH main configuration does not include drop-ins before hardening directives'])
+            + ([] if verify_ssh_firewall_active.rc == 0 and verify_ssh_firewall_active.stdout == 'active'
+                else ['SSH firewall unit is not active'])
+            + ([] if verify_ssh_firewall_enabled.rc == 0 and verify_ssh_firewall_enabled.stdout == 'enabled'
+                else ['SSH firewall unit is not enabled'])
+            + ([] if verify_nftables_enabled.stdout in ['disabled', 'masked']
+                else ['stock nftables service is not disabled'])
+            + ([] if verify_nftables_active.stdout == 'inactive'
+                else ['stock nftables service is not inactive'])
+            + ([] if (verify_nftables_override.content | default('') | b64decode
+                      | regex_search('(?m)^ExecStop=[ \t]*$')) is not none
+                else ['stock nftables override is missing or does not clear ExecStop'])
+            + ([] if verify_ssh_revert.rc == 0 and verify_ssh_revert.stdout_lines | length == 0
+                else ['SSH revert timer is pending or could not be checked'])
           ) }}
 
     # A resync, NTPSynchronized, and kept-back packages are reported, not

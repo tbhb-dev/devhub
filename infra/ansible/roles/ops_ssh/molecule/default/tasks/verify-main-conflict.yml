@@ -1,0 +1,31 @@
+---
+- name: Check a conflicting main SSH directive
+  block:
+    - name: Prepend the conflicting main directive
+      ansible.builtin.copy:
+        content: "{{ ops_ssh_main_conflict.directive }}\n{{ ops_ssh_main_before.content | b64decode }}"
+        dest: /etc/ssh/sshd_config
+        mode: "0644"
+
+    - name: Check that the health playbook detects the main configuration conflict
+      ansible.builtin.include_tasks: verify-health.yml
+      vars:
+        ops_ssh_expected_regressions: "{{ ops_ssh_main_conflict.regressions }}"
+        ops_ssh_expected_conflicting_files: "{{ ops_ssh_main_conflict.conflicting_files }}"
+
+    - name: Validate the drop-in against the conflicting main configuration
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-sshd-validate /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: ops_ssh_main_validation
+      changed_when: false
+      failed_when: false
+
+    - name: Check that validation rejects the main configuration conflict
+      ansible.builtin.assert:
+        that: ops_ssh_main_validation.rc != 0
+  always:
+    - name: Restore the original main configuration
+      ansible.builtin.copy:
+        content: "{{ ops_ssh_main_before.content | b64decode }}"
+        dest: /etc/ssh/sshd_config
+        mode: "0644"

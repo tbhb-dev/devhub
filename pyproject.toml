@@ -25,7 +25,7 @@ dev = [
 # refresh never pulls a release younger than that.
 ops = [
   "ansible-core==2.21.4",
-  "ansible-lint==26.9.0",
+  "ansible-lint==26.10.1",
   "molecule==26.9.0",
   "molecule-plugins[docker]==26.9.28",
 ]

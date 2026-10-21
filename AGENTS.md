@@ -25,7 +25,7 @@ The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Cla
 
 `infra/ansible/` holds the Ansible tree for host-level operations, and every run reads two inventories. Hosts appear there only as aliases such as `edge-1`, and the inventory in this repository sets groups and defaults that identify nothing. The private companion repository, cloned beside this one, stores the second inventory. That inventory maps each alias to its real host and pins `known_hosts`. Its variables add the authorized public keys and `techops_ssh_key_files`, which gives the key file for each remote account. Each `ops:*` task finds the private one through `TECHOPS_INTERNAL_DIR` in `mise.local.toml`. Without it, the task stops. mise reads every `mise.local.toml` from the working directory up, so a worktree inside this checkout still sets the variable. To see the refusal, run `TECHOPS_INTERNAL_DIR= bash tools/ops-ansible.sh verify` directly, never `mise run ops:verify`.
 
-Use the alias for a host everywhere in this repository and its history. Only the operator edits the private repository. An agent keeps every real host name, address, tailnet name, key, fingerprint, and console URL out of what it writes.
+Use the alias for a host everywhere in this repository and its history. An agent keeps every real host name, address, tailnet name, key, fingerprint, and console URL out of what it writes.
 
 An agent may run these tasks on its own:
 

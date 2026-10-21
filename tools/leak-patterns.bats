@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# devhub's .leak-patterns and .leak-allow under the shared leak gate, in a
+# techops-public's .leak-patterns and .leak-allow under the shared leak gate, in a
 # throwaway repository. Each sample is assembled at run time from made-up
 # values, so this file never spells out a shape the rules look for, and
 # every real *_PRIVATE_STRINGS variable is cleared before each case.

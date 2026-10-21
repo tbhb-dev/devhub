@@ -7,4 +7,4 @@
 # Comma-separated strings to keep out of the repository, such as host names,
 # tailnet names, account names or project identifiers. May be empty. An entry
 # under four characters is skipped, and an entry cannot contain a comma.
-DEVHUB_PRIVATE_STRINGS = "host.example.invalid, project.example.invalid"
+TECHOPS_PRIVATE_STRINGS = "host.example.invalid, project.example.invalid"

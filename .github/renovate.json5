@@ -21,5 +21,5 @@
     "github>tbhb-dev/devtools//.github/renovate-go-config.json5#902790ab90cb5e018d22c54ea4bb12711f632253", // v0.11.0
   ],
 
-  repositories: ["tbhb-dev/devhub"],
+  repositories: ["tbhb-dev/techops-public"],
 }

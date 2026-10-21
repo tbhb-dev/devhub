@@ -1,5 +1,5 @@
 ---
-# Main quality gate. devhub is a Go, Python, and TypeScript monorepo with
+# Main quality gate. techops-public is a Go, Python, and TypeScript monorepo with
 # one Go binary so far, so the gates are the full lint bar, the Go tests
 # (coverage threshold plus the race detector, on Linux and macOS), the
 # bats suites for the shell tools, the Python checks, and govulncheck.

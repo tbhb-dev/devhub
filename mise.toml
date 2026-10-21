@@ -9,12 +9,15 @@ lockfile = true
 idiomatic_version_file_enable_tools = []
 
 [tools]
+"go:github.com/tbhb-dev/devtools/cmd/guard-markdown" = "v0.13.0"
+"go:github.com/tbhb-dev/devtools/cmd/commit-lint" = "v0.13.0"
+"go:github.com/tbhb-dev/devtools/cmd/agentrepo" = "v0.13.0"
 # vendir can't come from the payload it delivers: bootstrap syncs before it installs.
 vendir = "0.46.2"
 apm = "0.33.0"
 shfmt = "3.14.1"
 jq = "1.8.2"
-# Runs tools/apm_audit.py, the one Python file this repo needs.
+# Runs the shared APM audit and the Python toolchain.
 uv = "0.13.1"
 # JS/TS workspace package manager; package.json packageManager names the same version.
 pnpm = "12.8.2"
@@ -22,9 +25,11 @@ pnpm = "12.8.2"
 [env]
 DEVTOOLS_LOCK_PLATFORMS = "linux-x64,macos-arm64"
 UV_PYTHON_PREFERENCE = "only-managed"
+DEVTOOLS_PROSE_GLOB = "!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,infra/ansible/.collections/*,node_modules/*,.nx/*,.venv/*,.pytest_cache/*,apm_modules/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}"
 
 [task_config]
 includes = [
+  ".devtools/tasks/apm.toml",
   ".devtools/tasks/fix.toml",
   ".devtools/tasks/format.toml",
   ".devtools/tasks/git-hooks.toml",
@@ -46,6 +51,7 @@ run = [
   "mise run install-tools",
   "mise run install-guard-markdown",
   "mise run devtools:prek-install",
+  "mise run devtools:install-pre-push-hook",
 ]
 
 [tasks.install-toolchain]
@@ -56,60 +62,22 @@ run = "mise install"
 description = "Download the Vale style packages .vale.ini names"
 run = "vale sync"
 
-# guard-markdown backs lint-markdown-wrap and the Claude write hook, and mise
-# has no pin for it. The version comes from the devtools pin in apm.yml, the
-# site devtools:update-pins moves, so a pin bump moves this install too.
+# mise puts the pinned guard-markdown on PATH for lint and agent hooks.
 [tasks.install-guard-markdown]
-description = "Install guard-markdown at the version the devtools pin in apm.yml names"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-version=$(bash tools/devtools-pin.sh)
-go install "github.com/tbhb-dev/devtools/cmd/guard-markdown@${version}"
-gobin="$(go env GOPATH)/bin"
-case ":$PATH:" in
-  *":$gobin:"*) ;;
-  *) echo "add $gobin to PATH so guard-markdown resolves" >&2 ;;
-esac
-'''
+description = "Install the mise-managed guard-markdown pin"
+run = "mise install go:github.com/tbhb-dev/devtools/cmd/guard-markdown"
 
 [tasks.check-vendored]
 description = "Fail when the vendored payload differs from what vendir.lock.yml pins, without touching the checkout"
 run = "bash tools/check-vendored.sh"
 
-# APM merges hook declarations into each harness's settings additively and
-# never reconciles, while `apm audit --ci` replays the same merge from an
-# empty tree and compares. Clearing the keys APM owns first hands the
-# merge the empty slate its replay assumes. Only those keys go, so a
-# hand-written setting elsewhere in each file survives. devtools:update-pins
-# calls this task by name.
+# Shared sync reconciles APM-owned hooks and audits the deployment.
+# Keep the consumer deployment check on manual syncs and in lint: the
+# updater calls devtools:apm-sync directly.
 [tasks.apm-sync]
-description = "Redeploy the APM primitives from a cleared hook state, then audit"
-depends_post = ["lint-apm", "lint-apm-deploy"]
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-clear_key() {
-  local file=$1 key=$2
-  [[ -f $file ]] || return 0
-  jq "del(.$key)" "$file" >"$file.tmp"
-  mv "$file.tmp" "$file"
-  [[ $(jq 'length' "$file") -gt 0 ]] || rm -f "$file"
-}
-clear_key .claude/settings.json hooks
-clear_key .codex/hooks.json hooks
-rm -f .claude/apm-hooks.json .codex/apm-hooks.json
-apm install
-'''
-
-# `apm audit --ci` replays the install into a scratch tree and diffs it
-# against the deployed files. APM scans each harness root whole, which
-# crosses into the agent worktrees under .claude/ and .codex/, so the
-# wrapper excludes Unicode findings inside registered worktrees and keeps
-# every other check.
-[tasks.lint-apm]
-description = "Check the deployed APM primitives against apm.lock.yaml"
-run = "uv run --no-project --python 3.14 python tools/apm_audit.py"
+description = "Redeploy and audit APM primitives, then check the consumer deployment"
+depends_post = ["lint-apm-deploy"]
+run = "mise run devtools:apm-sync"
 
 # The bare devtools pin plus `target: [claude, codex]` is assumed to
 # deploy the claude, common, and codex packages and nothing for
@@ -124,30 +92,12 @@ extends = "devtools:lint-commit-msg"
 [tasks.lint-squash-msg]
 extends = "devtools:lint-squash-msg"
 
-# The shared gate's working-tree scan reads every tracked file, vendor/
-# included (tbhb-dev/devtools#218). `go mod vendor` writes that tree from
-# public modules and vendor-check holds it to go.sum, so this scan hands
-# the gate every other file instead. Staged, range, and pre-push scans run
-# devtools:lint-leaks directly and still read any vendored file a commit
-# carries. The gate's file mode takes regular files only, so anything else
-# fails here rather than passing without a scan.
+# .leak-skip excludes vendor/ only in working-tree mode. Staged, range,
+# pre-push and explicit-file scans still check vendored content.
 [tasks.lint-leaks]
 description = "Scan the working tree for private values, except the vendored Go modules"
 quiet = true
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-list=$(mktemp)
-trap 'rm -f "$list"' EXIT
-while IFS= read -r -d '' f; do
-  if [[ -L $f || (-e $f && ! -f $f) ]]; then
-    echo "lint-leaks: a tracked path isn't a regular file; scan it with mise run devtools:lint-leaks" >&2
-    exit 1
-  fi
-  [[ -f $f ]] && printf '%s\0' "$f"
-done < <(git ls-files -z --cached --others --exclude-standard -- ':!:vendor/') >"$list"
-xargs -0 bash .devtools/scripts/check-leaks.sh <"$list"
-'''
+run = "mise run devtools:lint-leaks"
 
 # The pull request counterpart the pr skill calls. Body copied from
 # devtools/mise.toml [tasks.lint-pr-description]; validate-description.sh
@@ -161,51 +111,28 @@ run = [
   "bash .devtools/scripts/check-leaks.sh PR_AGENTDESC.md",
 ]
 
-# Both draft tasks are scoped to the one file they receive. The fix-prose
-# skills call them by name. The scripts are copies of the devtools ones.
+# Shared draft tasks keep the consumer's Vale and spelling policy.
 [tasks.lint-draft]
 extends = "devtools:lint-draft"
-run = 'bash tools/lint-draft.sh "$usage_file"'
 
 [tasks.fix-prose-replacements]
 extends = "devtools:fix-prose-replacements"
-run = 'uv run --script tools/fix_prose_replacements.py "$usage_file"'
 
-# Body copied from devtools/mise.toml [tasks.lint-prose]; the glob is why it
-# stays repo-specific. The deployed agent primitives answer to upstream's
-# prose, so the harness skill and rule trees are excluded.
 [tasks.lint-prose]
 extends = "devtools:lint-prose"
-run = "vale --output=ai-tells-agent.tmpl --glob='!{LICENSE,CHANGELOG.md,.vale/*,tmp/*,vendor/*,infra/ansible/.collections/*,node_modules/*,.nx/*,.venv/*,.pytest_cache/*,apm_modules/*,.claude/skills/*,.claude/rules/*,.agents/skills/*,.claude/worktrees/*,.codex/worktrees/*,.worktrees/*,COMMIT_AGENTMSG,PR_AGENTDESC.md,SQUASH_AGENTMSG}' $usage_paths"
 
 [tasks.lint-markdown-wrap]
 description = "Fail if any Markdown paragraph spans more than one line"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-files=$(git ls-files '*.md' ':!:CHANGELOG.md' ':!:vendor/**')
-if [[ -n $files ]]; then guard-markdown $files; fi
-'''
+run = "mise run devtools:lint-markdown-wrap"
 
-# Two tasks, not one: the fix-pr skill maps a failing "shell" check to
-# `mise run lint-shell && mise run lint-shell-fmt` (fix-pr/scripts/diagnose.sh).
+# Keep these local names for hooks and existing callers.
 [tasks.lint-shell]
 description = "Lint the shell scripts via shellcheck"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-files=$(git ls-files --cached --others --exclude-standard -- '*.sh' ':!:vendor/**' ':!:.claude/**' ':!:.agents/**')
-[[ -z $files ]] || shellcheck $files
-'''
+run = "mise run devtools:lint-shell"
 
 [tasks.lint-shell-fmt]
 description = "Fail if shfmt would reformat any shell script"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-files=$(git ls-files --cached --others --exclude-standard -- '*.sh' ':!:vendor/**' ':!:.claude/**' ':!:.agents/**')
-[[ -z $files ]] || shfmt -d $files
-'''
+run = "mise run devtools:lint-shell-fmt"
 
 [tasks.lint]
 extends = "devtools:lint"
@@ -214,10 +141,10 @@ run = [
   "mise run lint-leaks",
   "mise run devtools:check-leak-hook",
   "mise run devtools:check-pins",
-  "mise run lint-apm",
+  "mise run devtools:lint-apm",
   "mise run lint-apm-deploy",
   "mise run lint-go-all",
-  "mise run lint-py-all",
+  # Restore Python lint when first-party Python lands or devtools v0.14.1 skips empty trees.
   "mise run lock-check",
   "mise run lint-prose",
   "mise run devtools:lint-spelling",
@@ -230,6 +157,7 @@ run = [
   "mise run devtools:lint-mise",
   "mise run lint-shell",
   "mise run lint-shell-fmt",
+  "mise run devtools:lint-curl",
   "mise run lint-ansible",
 ]
 
@@ -238,8 +166,8 @@ description = "Test the vendored-payload drift gate on a copy of the tree"
 run = "bats tools/check-vendored.bats"
 
 [tasks.test-tools]
-description = "Test the devtools pin parser, the prose fixer's failure handling, the ops task refusals, and the leak gate rules"
-run = "bats tools/devtools-pin.bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats"
+description = "Test draft task failures, ops task refusals, and leak gate rules"
+run = "bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats"
 
 [tasks.test]
 description = "Run every test suite"
@@ -654,8 +582,10 @@ uv run pip-audit --cache-dir "$work/cache" --locked "$work"
 # infra/ansible/.collections. lint-ansible and test-ansible touch no real
 # host; the ops:* tasks do, through tools/ops-ansible.sh.
 
+# Ansible needs UTF-8 even when the commit gates set LC_ALL=C.
 [tasks.install-ansible]
 description = "Install the pinned Ansible collections into infra/ansible/.collections"
+env = { LC_ALL = "C.UTF-8" }
 dir = "{{config_root}}/infra/ansible"
 run = "uv run --group ops ansible-galaxy collection install -r requirements.yml -p .collections"
 
@@ -663,6 +593,7 @@ run = "uv run --group ops ansible-galaxy collection install -r requirements.yml 
 # sees both sources the ops tasks pass.
 [tasks.lint-ansible]
 description = "Lint the Ansible tree and syntax-check the playbooks against a stub inventory"
+env = { LC_ALL = "C.UTF-8" }
 depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
 run = [
@@ -676,7 +607,7 @@ run = [
 description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
 depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
-env = { ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
+env = { LC_ALL = "C.UTF-8", ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
 run = [
   "bats {{config_root}}/tools/ops-ansible-ssh.bats",
   "for scenario in roles/*/molecule; do (cd \"${scenario%/molecule}\" && uv run --group ops molecule test) || exit; done",
@@ -686,14 +617,17 @@ run = [
 # check and apply also take a playbook name first; see the script header.
 [tasks."ops:verify"]
 description = "Run the verify playbook against the real hosts as ops-ro"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh verify"
 
 [tasks."ops:check"]
 description = "Dry-run a playbook against the real hosts as ops, with --check --diff"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh check"
 
 [tasks."ops:apply"]
 description = "Apply a playbook to the real hosts as ops; operator-only, refused without a terminal"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh apply"
 
 # --- JS/TS and nx tasks (upstream candidate: pnpm pin and nx tasks, not yet filed) ---

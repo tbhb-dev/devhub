@@ -99,3 +99,26 @@ caught() {
   [[ $output != *"pattern:"* ]]
   [[ $output != *"synthetic-zz-host"* ]]
 }
+
+@test ".leak-skip excludes only vendor descendants in working-tree mode" {
+  printf '^vendor/\n' >.leak-skip
+  mkdir vendor vendor-neighbor
+  export FOO_PRIVATE_STRINGS="synthetic-zz-host"
+  printf '%s\n' "$FOO_PRIVATE_STRINGS" >vendor/a.txt
+  git add -- .leak-skip vendor/a.txt
+  run bash "$checker"
+  [ "$status" -eq 0 ]
+
+  run bash "$checker" --staged
+  [ "$status" -eq 1 ]
+  [[ $output == *"vendor/a.txt:1: private literal"* ]]
+
+  run bash "$checker" vendor/a.txt
+  [ "$status" -eq 1 ]
+
+  printf '%s\n' "$FOO_PRIVATE_STRINGS" >vendor-neighbor/a.txt
+  run bash "$checker"
+  [ "$status" -eq 1 ]
+  [[ $output == *"vendor-neighbor/a.txt:1: private literal"* ]]
+  [[ $output != *"vendor/a.txt:1:"* ]]
+}

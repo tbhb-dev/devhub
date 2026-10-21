@@ -102,3 +102,6 @@ venv
 worktree
 worktrees
 xdist
+cspell
+mise
+agentrepo

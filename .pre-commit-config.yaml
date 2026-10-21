@@ -12,7 +12,8 @@ exclude: ^(vendor/|bin/|dist/|node_modules/|\.nx/|pnpm-lock\.yaml$|uv\.lock$)
 # manager tracks.
 #
 # Install with `mise run devtools:prek-install`, which sets up the
-# commit-msg, pre-commit, pre-push, and post-commit stages.
+# commit-msg, pre-commit, pre-push, and post-commit stages. Then run
+# `mise run devtools:install-pre-push-hook` to install the combined wrapper.
 
 repos:
   - repo: builtin
@@ -30,10 +31,11 @@ repos:
   # COMMIT_AGENTMSG draft once a commit lands. vale-commit-msg and
   # cspell-commit-msg read this repository's .vale.ini and .cspell.jsonc.
   - repo: https://github.com/tbhb-dev/devtools
-    rev: 902790ab90cb5e018d22c54ea4bb12711f632253  # frozen: v0.11.0
+    rev: 46c288f4e186271c1bd62f8843a1cb2ad28a4746  # frozen: v0.13.0
     hooks:
       - id: commit-trailers
       - id: commitlint
+      - id: commit-msg-pre-push
       - id: vale-commit-msg
       - id: cspell-commit-msg
       - id: clear-commit-agentmsg
@@ -135,7 +137,7 @@ repos:
       # instead.
       - id: apm-audit
         name: apm audit
-        entry: mise run lint-apm
+        entry: mise run devtools:lint-apm
         language: system
         files: ^(apm\.(yml|lock\.yaml)$|\.claude/|\.agents/|\.codex/hooks\.json$)
         pass_filenames: false
@@ -160,14 +162,15 @@ repos:
         name: devtools pin agreement
         entry: mise run devtools:check-pins
         language: system
-        files: ^(apm\.yml|vendir\.yml|\.pre-commit-config\.yaml|\.github/renovate\.json5|\.github/workflows/.*)$
+        files: >-
+          ^(mise\.toml|apm\.yml|vendir\.yml|\.pre-commit-config\.yaml|\.github/renovate\.json5|\.github/workflows/.*)$
         pass_filenames: false
 
       # The leak check, at two stages. Staged scans the index blobs, so a
       # private value cannot hide behind a cleaned working file. The message
       # file arrives as the hook's argument. The pre-push stage isn't here:
-      # prek hides git's ref lines, so devtools:prek-install puts the check
-      # in front of prek's pre-push hook instead.
+      # prek hides the Git ref lines. devtools:install-pre-push-hook runs
+      # the commit and leak scans before prek, once per push.
       - id: leaks-staged
         name: leak check (staged files)
         entry: mise run devtools:lint-leaks -- --staged

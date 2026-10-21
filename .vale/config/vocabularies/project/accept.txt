@@ -38,3 +38,5 @@ node_modules
 [Aa]nsible
 tailnet
 sudo
+mise
+shellcheck

@@ -12,14 +12,14 @@ This repository is public. Never commit a hostname, an address outside the docum
 
 ## Tools
 
-mise pins the tools and defines the tasks. The shared half arrives from `tbhb-dev/devtools` through vendir into `.config/mise/conf.d/` and `.devtools/tasks/`. Never edit those two directories by hand. Run `mise run bootstrap` once to sync the payload and install the tools plus the git hooks.
+mise pins the tools and defines the tasks. The shared half arrives from `tbhb-dev/devtools` through vendir into `.config/mise/conf.d/` and `.devtools/tasks/`. Never edit those two directories by hand. Run `mise run bootstrap` once to sync the payload and install the tools plus the git hooks. Bootstrap runs `devtools:prek-install`, then `devtools:install-pre-push-hook` so commit and leak scans see the Git ref lines before prek.
 
 - `mise run lint` runs every lint gate in order.
 - `mise run test` runs the test suites.
 - `mise run check` runs both.
-- `mise run devtools:update-pins <version>` moves every devtools pin together, both Renovate presets included. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`.
+- `mise run devtools:update-pins <version>` moves every devtools pin together, both Renovate presets included. Redeploy the agent primitives with `mise run apm-sync` instead of a bare `apm install`. This wraps `devtools:apm-sync` and runs the consumer deployment check. The updater calls the shared sync directly.
 
-The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Claude write hook. `mise run bootstrap` installs it through `mise run install-guard-markdown`, which takes the version from the devtools pin in `apm.yml`. A pin bump moves it too. Keep the Go bin directory on PATH.
+The `guard-markdown` binary must be on PATH for `lint-markdown-wrap` and the Claude write hook. `mise run bootstrap` installs it through `mise run install-guard-markdown`, which installs the root mise `go:` pin. A pin bump moves it too. Run agent sessions under `mise exec --` so the hook sees the pinned binary.
 
 ## Operations
 

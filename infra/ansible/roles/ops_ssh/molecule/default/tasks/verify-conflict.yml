@@ -1,0 +1,32 @@
+---
+- name: Check detection of a conflicting later SSH drop-in
+  block:
+    - name: Plant the conflicting directive
+      ansible.builtin.copy:
+        content: "{{ ops_ssh_conflict.content }}"
+        dest: /etc/ssh/sshd_config.d/99-conflict.conf
+        mode: "0644"
+
+    - name: Check that the health playbook detects the conflicting file
+      ansible.builtin.include_tasks: verify-health.yml
+      vars:
+        ops_ssh_expected_regressions: [SSH configuration has conflicting directives]
+        ops_ssh_expected_conflicting_files: [/etc/ssh/sshd_config.d/99-conflict.conf]
+
+    # Exercise the live validator directly to avoid nesting the hardening
+    # playbook inside verify; the role runs this same command on every apply.
+    - name: Validate the unchanged live drop-in against the conflicting file
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-sshd-validate /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: ops_ssh_live_conflict
+      changed_when: false
+      failed_when: false
+
+    - name: Check that the live configuration was rejected
+      ansible.builtin.assert:
+        that: ops_ssh_live_conflict.rc != 0
+  always:
+    - name: Remove the conflicting drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/99-conflict.conf
+        state: absent

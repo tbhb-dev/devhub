@@ -1,0 +1,22 @@
+FROM {{ item.image }}
+
+ENV container=docker
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod +x /usr/sbin/policy-rc.d \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        python3 python3-apt openssh-server systemd systemd-sysv dbus sudo nftables util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm /usr/sbin/policy-rc.d \
+    && useradd --create-home --shell /bin/bash ops \
+    && useradd --create-home --shell /bin/bash ops-ro \
+    && printf 'ops ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/ops \
+    && chmod 0440 /etc/sudoers.d/ops \
+    && printf 'PasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf \
+    && systemctl disable ssh.service \
+    && systemctl enable nftables.service ssh.socket dbus.socket
+
+# A container can't load kernel modules.
+RUN systemctl mask systemd-modules-load.service
+
+CMD ["/sbin/init"]

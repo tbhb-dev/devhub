@@ -1,0 +1,10 @@
+---
+argument_specs:
+  main:
+    short_description: Restrict SSH to the ops accounts and the tailnet interface
+    options:
+      ops_ssh_allow_users:
+        type: list
+        elements: str
+        default: [ops, ops-ro]
+        description: Accounts allowed to log in through SSH, including the connection user.

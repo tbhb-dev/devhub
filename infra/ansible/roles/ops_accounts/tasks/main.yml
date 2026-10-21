@@ -1,5 +1,5 @@
 ---
-# Root's keys and sshd stay untouched here; SSH hardening owns both.
+# Root's keys stay in place; SSH hardening owns sshd.
 
 # argument_specs rejects an unset list but accepts an empty one, and an
 # exclusive empty key list would lock the account out.

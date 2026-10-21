@@ -35,6 +35,8 @@ An agent may run these tasks on its own:
 
 The other two need the operator. `mise run ops:check` runs as `ops` with `--check --diff`, and the `ops` key asks the operator to approve each new session. `mise run ops:apply` stays operator-only until tbhb-dev/devtools#165 merges, and it refuses to run without a terminal.
 
+SSH permits only `ops` and `ops-ro`, with no root login. The `techops-ssh.service` firewall unit allows new SSH connections only through `lo` and `tailscale0` and preserves the tailnet's firewall rules. `nftables.service` stays inactive because its configuration flushes the ruleset.
+
 ## Commit messages
 
 Run the `commit` skill. Draft the message in the repo-root file `COMMIT_AGENTMSG`, which a gitignore entry keeps out of history, then run `mise run lint-commit-msg`. The prek commit-msg hook is the real gate. Stage paths by name, and never run `git add -A` or `git add .`.

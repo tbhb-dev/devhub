@@ -1,0 +1,6 @@
+---
+- name: Prepare the SSH test
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Run the SSH hardening playbook
+  ansible.builtin.import_playbook: ../../../../playbooks/ssh.yml

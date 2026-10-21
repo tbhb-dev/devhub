@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+table inet techops_ssh
+delete table inet techops_ssh
+table inet techops_ssh {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname != { "lo", "tailscale0" } tcp dport 22 ct state new drop
+    }
+}

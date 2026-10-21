@@ -1,0 +1,485 @@
+---
+- name: Verify SSH hardening
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the effective SSH configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: ops_ssh_effective
+      changed_when: false
+
+    - name: Read the SSH firewall table
+      ansible.builtin.command:
+        cmd: nft list table inet techops_ssh
+      register: ops_ssh_table
+      changed_when: false
+
+    - name: Read the stand-in table
+      ansible.builtin.command:
+        cmd: nft list table inet tailscale_stand_in
+      changed_when: false
+
+    - name: Read the stock nftables state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active nftables.service
+      register: ops_ssh_stock_active
+      changed_when: false
+      failed_when: false
+
+    - name: Look for a pending revert timer
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl list-timers --no-legend --plain techops-ssh-revert.timer
+      register: ops_ssh_timers
+      changed_when: false
+
+    - name: Check the effective hardening
+      ansible.builtin.assert:
+        that:
+          - "'permitrootlogin no' in ops_ssh_effective.stdout_lines"
+          - "'passwordauthentication no' in ops_ssh_effective.stdout_lines"
+          - "'kbdinteractiveauthentication no' in ops_ssh_effective.stdout_lines"
+          # sshd -T prints one allowusers line per account.
+          - >-
+            ops_ssh_effective.stdout_lines | select('match', '^allowusers ') | list
+            == ['allowusers ops', 'allowusers ops-ro']
+          - "'type filter hook input priority filter; policy accept;' in ops_ssh_table.stdout"
+          - "'iifname != { \"lo\", \"tailscale0\" } tcp dport 22 ct state new drop' in ops_ssh_table.stdout"
+          - ops_ssh_timers.stdout_lines | length == 0
+          - ops_ssh_stock_active.stdout == 'inactive'
+
+    - name: Check the hardened host through the read-only health playbook
+      ansible.builtin.include_tasks: tasks/verify-health.yml
+      vars:
+        ops_ssh_expected_regressions: []
+
+    - name: Check health reporting and live validation after SSH configuration drift
+      ansible.builtin.include_tasks: tasks/verify-conflict.yml
+      loop:
+        - name: AllowUsers
+          content: "AllowUsers someone-else\n"
+        - name: Match
+          content: "Match User ops\n    PasswordAuthentication yes\n"
+        - name: Include
+          content: "Include /etc/ssh/sshd_config.d/50-cloud-init.conf\n"
+      loop_control:
+        loop_var: ops_ssh_conflict
+        label: "{{ ops_ssh_conflict.name }}"
+
+    - name: Check that starting the stock nftables service preserves tables
+      block:
+        - name: Start the stock nftables service
+          ansible.builtin.systemd_service:
+            name: nftables.service
+            state: started
+
+        - name: Check that both tables survived the stock service start
+          ansible.builtin.command:
+            cmd: nft list table inet {{ item }}
+          loop: [tailscale_stand_in, techops_ssh]
+          changed_when: false
+
+        - name: Check that the health playbook detects the active stock service
+          ansible.builtin.include_tasks: tasks/verify-health.yml
+          vars:
+            ops_ssh_expected_regressions: [stock nftables service is not inactive]
+      always:
+        - name: Stop the stock nftables service after testing its override
+          ansible.builtin.systemd_service:
+            name: nftables.service
+            state: stopped
+
+    - name: Check health reporting with the SSH firewall stopped
+      block:
+        - name: Stop the SSH firewall
+          ansible.builtin.systemd_service:
+            name: techops-ssh.service
+            state: stopped
+
+        - name: Check that the health playbook detects the stopped firewall
+          ansible.builtin.include_tasks: tasks/verify-health.yml
+          vars:
+            ops_ssh_expected_regressions: [SSH firewall unit is not active]
+      always:
+        - name: Restore the SSH firewall
+          ansible.builtin.systemd_service:
+            name: techops-ssh.service
+            state: started
+
+    - name: Check health reporting with a pending revert timer
+      block:
+        - name: Arm the revert timer for the health test
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-ssh-revert arm
+          changed_when: true
+
+        - name: Check that the health playbook detects the pending timer
+          ansible.builtin.include_tasks: tasks/verify-health.yml
+          vars:
+            ops_ssh_expected_regressions: [SSH revert timer is pending or could not be checked]
+      always:
+        - name: Cancel the revert timer after the health test
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-ssh-revert cancel
+          changed_when: true
+
+    - name: Read the valid drop-in before testing rejection
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: ops_ssh_before
+
+    - name: Check an extra Include in the techops drop-in
+      block:
+        - name: Append an extra directive to the techops drop-in
+          ansible.builtin.copy:
+            content: "{{ ops_ssh_before.content | b64decode }}Include /etc/ssh/sshd_config.d/50-cloud-init.conf\n"
+            dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+            mode: "0644"
+
+        - name: Check that the health playbook detects the extra line and Include
+          ansible.builtin.include_tasks: tasks/verify-health.yml
+          vars:
+            ops_ssh_expected_regressions:
+              - SSH hardening drop-in values differ
+              - SSH configuration has conflicting directives
+            ops_ssh_expected_conflicting_files: [/etc/ssh/sshd_config.d/00-techops-ssh.conf]
+
+        - name: Validate the techops drop-in with the extra Include
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-sshd-validate /etc/ssh/sshd_config.d/00-techops-ssh.conf
+          register: ops_ssh_extra_include
+          changed_when: false
+          failed_when: false
+
+        - name: Check that validation rejects the techops Include
+          ansible.builtin.assert:
+            that: ops_ssh_extra_include.rc != 0
+      always:
+        - name: Restore the techops drop-in after the extra directive test
+          ansible.builtin.copy:
+            content: "{{ ops_ssh_before.content | b64decode }}"
+            dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+            mode: "0644"
+
+    - name: Read the main configuration before testing conflicting directives
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: ops_ssh_main_before
+
+    - name: Check health reporting and validation of main configuration conflicts
+      ansible.builtin.include_tasks: tasks/verify-main-conflict.yml
+      loop:
+        - directive: ChallengeResponseAuthentication yes
+          regressions: [SSH main configuration does not include drop-ins before hardening directives]
+          conflicting_files: []
+        - directive: Include /etc/ssh/sshd_config.d/50-cloud-init.conf
+          regressions: [SSH configuration has conflicting directives]
+          conflicting_files: [/etc/ssh/sshd_config]
+      loop_control:
+        loop_var: ops_ssh_main_conflict
+        label: "{{ ops_ssh_main_conflict.directive }}"
+
+    - name: Check precedence against an earlier uppercase drop-in
+      block:
+        - name: Plant an earlier drop-in that shadows the candidate
+          ansible.builtin.copy:
+            content: "PasswordAuthentication yes\n"
+            dest: /etc/ssh/sshd_config.d/00-Override.conf
+            mode: "0644"
+
+        - name: Check that the health playbook detects SSH drop-in order
+          ansible.builtin.include_tasks: tasks/verify-health.yml
+          vars:
+            ops_ssh_expected_regressions: [SSH hardening drop-in does not sort first]
+
+        - name: Try a valid candidate shadowed by the earlier drop-in
+          ansible.builtin.copy:
+            content: "{{ ops_ssh_before.content | b64decode }}\n# Candidate for validation\n"
+            dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+            mode: "0644"
+            validate: /usr/local/sbin/techops-sshd-validate %s
+          register: ops_ssh_shadowed
+          ignore_errors: true
+
+        - name: Read the live drop-in after the shadowed candidate was rejected
+          ansible.builtin.slurp:
+            src: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+          register: ops_ssh_after_shadowed
+
+        - name: Check that precedence validation preserved the live file
+          ansible.builtin.assert:
+            that:
+              - ops_ssh_shadowed is failed
+              - ops_ssh_before.content == ops_ssh_after_shadowed.content
+      always:
+        - name: Remove the earlier drop-in
+          ansible.builtin.file:
+            path: /etc/ssh/sshd_config.d/00-Override.conf
+            state: absent
+
+    - name: Try an invalid candidate
+      ansible.builtin.copy:
+        content: "NotAnSSHDirective yes\n"
+        dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+        mode: "0644"
+        validate: /usr/local/sbin/techops-sshd-validate %s
+      register: ops_ssh_invalid
+      ignore_errors: true
+
+    - name: Read the drop-in after rejection
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: ops_ssh_after
+
+    - name: Check that failed validation preserved the live file
+      ansible.builtin.assert:
+        that:
+          - ops_ssh_invalid is failed
+          - ops_ssh_before.content == ops_ssh_after.content
+
+    - name: Try a candidate without an allow list
+      ansible.builtin.copy:
+        content: "PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+        dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+        mode: "0644"
+        validate: /usr/local/sbin/techops-sshd-validate %s
+      register: ops_ssh_missing_users
+      ignore_errors: true
+
+    - name: Check that a candidate needs an allow list
+      ansible.builtin.assert:
+        that: ops_ssh_missing_users is failed
+
+    - name: Check validation against another invalid drop-in
+      block:
+        - name: Plant an invalid later drop-in
+          ansible.builtin.copy:
+            content: "NotAnSSHDirective yes\n"
+            dest: /etc/ssh/sshd_config.d/99-invalid.conf
+            mode: "0644"
+
+        - name: Try a valid candidate against the invalid effective configuration
+          ansible.builtin.copy:
+            content: "{{ ops_ssh_before.content | b64decode }}\n# Candidate for validation\n"
+            dest: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+            mode: "0644"
+            validate: /usr/local/sbin/techops-sshd-validate %s
+          register: ops_ssh_invalid_effective
+          ignore_errors: true
+
+        - name: Read the drop-in after the whole configuration was rejected
+          ansible.builtin.slurp:
+            src: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+          register: ops_ssh_after_effective
+
+        - name: Check that validation includes every drop-in
+          ansible.builtin.assert:
+            that:
+              - ops_ssh_invalid_effective is failed
+              - ops_ssh_before.content == ops_ssh_after_effective.content
+      always:
+        - name: Remove the invalid later drop-in
+          ansible.builtin.file:
+            path: /etc/ssh/sshd_config.d/99-invalid.conf
+            state: absent
+
+    - name: Check that the SSH socket is listening
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active ssh.socket
+      changed_when: false
+
+    - name: Read the SSH daemon state before activation
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active ssh.service
+      register: ops_ssh_idle
+      changed_when: false
+      failed_when: ops_ssh_idle.stdout != 'inactive'
+
+    - name: Exercise the reload target with an idle socket
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-ssh-revert reload
+      changed_when: false
+
+    - name: Check that reloading did not start the idle daemon
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active ssh.service
+      register: ops_ssh_still_idle
+      changed_when: false
+      failed_when: ops_ssh_still_idle.stdout != 'inactive'
+
+    - name: Check recovery before rearming over an interrupted run
+      block:
+        - name: Arm the timer for the interrupted run
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-ssh-revert arm
+          changed_when: true
+
+        - name: Simulate a partially applied SSH configuration
+          ansible.builtin.file:
+            path: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+            state: absent
+
+        - name: Rearm over the interrupted run
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-ssh-revert arm
+          register: ops_ssh_rearmed
+          changed_when: true
+
+        - name: Look for the drop-in after recovery
+          ansible.builtin.stat:
+            path: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+          register: ops_ssh_retry_drop_in
+
+        - name: Look for the table after recovery
+          ansible.builtin.command:
+            cmd: nft list table inet techops_ssh
+          register: ops_ssh_retry_table
+          changed_when: false
+          failed_when: false
+
+        - name: Read the firewall boot state after recovery
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl is-enabled techops-ssh.service
+          register: ops_ssh_retry_unit
+          changed_when: false
+          failed_when: false
+
+        - name: Check that the stand-in table survived recovery
+          ansible.builtin.command:
+            cmd: nft list table inet tailscale_stand_in
+          changed_when: false
+
+        - name: Check that a fresh revert timer is active
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl is-active techops-ssh-revert.timer
+          changed_when: false
+
+        - name: Check that rearming ran the full revert first
+          ansible.builtin.assert:
+            that:
+              - "'reverting before rearming' in ops_ssh_rearmed.stderr"
+              - not ops_ssh_retry_drop_in.stat.exists
+              - ops_ssh_retry_table.rc != 0
+              - ops_ssh_retry_unit.stdout == 'disabled'
+      always:
+        - name: Cancel the timer after the interrupted run test
+          ansible.builtin.command:
+            cmd: /usr/local/sbin/techops-ssh-revert cancel
+          changed_when: true
+
+        - name: Restore hardening after the interrupted run test
+          ansible.builtin.include_role:
+            name: ops_ssh
+
+        - name: Apply the restored hardening handlers
+          ansible.builtin.meta: flush_handlers
+
+    - name: Start the SSH daemon for the timer revert test
+      ansible.builtin.systemd_service:
+        name: ssh.service
+        state: started
+
+    - name: Read the SSH daemon PID before reloading
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl show --property=MainPID --value ssh.service
+      register: ops_ssh_pid_before
+      changed_when: false
+
+    # sshd re-execs in place on SIGHUP, so the PID alone cannot prove a
+    # reload happened. Its journal message distinguishes reload from no-op.
+    - name: Read the SSH daemon journal before reloading
+      ansible.builtin.command:
+        cmd: journalctl --unit=ssh.service --quiet --no-pager --output=cat
+      register: ops_ssh_journal_before
+      changed_when: false
+
+    - name: Arm the real revert timer
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/techops-ssh-revert arm
+      changed_when: true
+
+    - name: Start the transient service the timer would start
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl start techops-ssh-revert.service
+      changed_when: true
+
+    - name: Wait for the transient revert units to finish
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active {{ item }}
+      loop: [techops-ssh-revert.service, techops-ssh-revert.timer]
+      register: ops_ssh_revert_state
+      changed_when: false
+      failed_when: ops_ssh_revert_state.stdout not in ['active', 'activating', 'deactivating', 'inactive', 'unknown']
+      until: ops_ssh_revert_state.stdout in ['inactive', 'unknown']
+      retries: 5
+      delay: 1
+
+    - name: Wait for the SSH daemon to acknowledge the reload
+      ansible.builtin.command:
+        cmd: journalctl --unit=ssh.service --quiet --no-pager --output=cat
+      register: ops_ssh_journal_after
+      changed_when: false
+      until: >-
+        ops_ssh_journal_after.stdout_lines | select('search', 'Received SIGHUP; restarting\.') | list | length
+        > ops_ssh_journal_before.stdout_lines | select('search', 'Received SIGHUP; restarting\.') | list | length
+      retries: 5
+      delay: 1
+
+    - name: Read the SSH daemon PID after reloading
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl show --property=MainPID --value ssh.service
+      register: ops_ssh_pid_after
+      changed_when: false
+
+    - name: Check that the SSH daemon was reloaded without restarting
+      ansible.builtin.assert:
+        that:
+          - ops_ssh_pid_before.stdout | int > 0
+          - ops_ssh_pid_before.stdout == ops_ssh_pid_after.stdout
+
+    - name: Look for the reverted drop-in
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.d/00-techops-ssh.conf
+      register: ops_ssh_reverted_drop_in
+
+    - name: Look for the reverted table
+      ansible.builtin.command:
+        cmd: nft list table inet techops_ssh
+      register: ops_ssh_reverted_table
+      changed_when: false
+      failed_when: false
+
+    - name: Read the reverted firewall boot state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-enabled techops-ssh.service
+      register: ops_ssh_reverted_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Read the reverted firewall state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active techops-ssh.service
+      register: ops_ssh_reverted_active
+      changed_when: false
+      failed_when: false
+
+    - name: Check that the stand-in table survived the revert
+      ansible.builtin.command:
+        cmd: nft list table inet tailscale_stand_in
+      changed_when: false
+
+    - name: Read the restored SSH configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: ops_ssh_restored
+      changed_when: false
+
+    - name: Check the revert
+      ansible.builtin.assert:
+        that:
+          - not ops_ssh_reverted_drop_in.stat.exists
+          - ops_ssh_reverted_table.rc != 0
+          - ops_ssh_reverted_unit.stdout == 'disabled'
+          - ops_ssh_reverted_active.stdout == 'inactive'
+          - "'passwordauthentication yes' in ops_ssh_restored.stdout_lines"

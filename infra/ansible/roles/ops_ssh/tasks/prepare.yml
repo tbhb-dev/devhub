@@ -1,0 +1,26 @@
+---
+- name: Keep the connection account in the SSH allow list
+  ansible.builtin.assert:
+    that:
+      - ops_ssh_allow_users | length > 0
+      - ansible_user in ops_ssh_allow_users
+      - ops_ssh_allow_users | select('match', '^[a-z_][a-z0-9_-]*$') | list | length == ops_ssh_allow_users | length
+    fail_msg: ops_ssh_allow_users must contain account names and include ansible_user
+    quiet: true
+
+- name: Install the firewall and namespace tools
+  ansible.builtin.apt:
+    name: [nftables, util-linux]
+    state: present
+    # Do not let package installation start the stock flushing service.
+    policy_rc_d: 101
+  register: ops_ssh_packages
+
+- name: Install the SSH validation and revert helpers
+  ansible.builtin.copy:
+    src: "{{ item }}.sh"
+    dest: /usr/local/sbin/{{ item }}
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [techops-sshd-validate, techops-ssh-revert]

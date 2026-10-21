@@ -1,0 +1,55 @@
+---
+# Docker's connection plugin honors ansible_user with docker exec -u.
+# Run the production playbook on the controller, as ops-ro without sudo.
+- name: Run the real host health playbook as ops-ro
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - "{{ playbook_dir }}/../../../../inventory"
+      - -i
+      - "{{ lookup('env', 'MOLECULE_INVENTORY_FILE') }}"
+      - --limit
+      - "{{ inventory_hostname }}"
+      - -e
+      - '{"ansible_user":"ops-ro","ansible_become":false}'
+      - "{{ playbook_dir }}/../../../../playbooks/verify.yml"
+  environment:
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+  delegate_to: localhost
+  become: false
+  register: ops_ssh_health
+  changed_when: false
+  failed_when: ops_ssh_health.rc not in [0, 2]
+
+- name: Read the health playbook's regression results
+  ansible.builtin.set_fact:
+    ops_ssh_health_results: >-
+      {{ (ops_ssh_health.stdout | from_json).plays
+         | map(attribute='tasks') | flatten | map(attribute='hosts')
+         | map('dict2items') | flatten | map(attribute='value')
+         | selectattr('ansible_facts.verify_regressions', 'defined') | list }}
+
+- name: Check that the real playbook evaluated its checks
+  ansible.builtin.assert:
+    that: ops_ssh_health_results | length == 1
+
+- name: Check the expected SSH regressions and no other failures
+  vars:
+    ops_ssh_health_regressions: "{{ ops_ssh_health_results[0].ansible_facts.verify_regressions }}"
+    ops_ssh_health_stats: "{{ (ops_ssh_health.stdout | from_json).stats[inventory_hostname] }}"
+    # The container shares the kernel's RAID view.
+    ops_ssh_health_allowed:
+      - no RAID arrays in /proc/mdstat
+      - a RAID array is missing a member
+      - a RAID array reports no member status
+  ansible.builtin.assert:
+    that:
+      - ops_ssh_health_regressions | difference(ops_ssh_health_allowed) | sort == ops_ssh_expected_regressions | sort
+      - ops_ssh_health_stats.unreachable == 0
+      - ops_ssh_health_stats.failures == (1 if ops_ssh_health_regressions | length > 0 else 0)
+      - ops_ssh_health_stats.changed == 0
+      - >-
+        ops_ssh_health_results[0].ansible_facts.verify_report.ssh_conflicting_files | sort
+        == ops_ssh_expected_conflicting_files | default([]) | sort
+    fail_msg: "Unexpected health result: {{ ops_ssh_health_results[0].ansible_facts }}"

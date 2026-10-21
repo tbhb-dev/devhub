@@ -1,0 +1,16 @@
+---
+- name: Prepare the SSH firewall test
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    # This runs from converge so the test sequence matches ops_accounts.
+    - name: Preserve a stand-in for Tailscale's table
+      ansible.builtin.shell:
+        cmd: |
+          if ! nft list table inet tailscale_stand_in >/dev/null 2>&1; then
+            nft add table inet tailscale_stand_in
+            echo created
+          fi
+      register: ops_ssh_stand_in
+      changed_when: "'created' in ops_ssh_stand_in.stdout"

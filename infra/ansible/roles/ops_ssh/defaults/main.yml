@@ -1,0 +1,2 @@
+---
+ops_ssh_allow_users: [ops, ops-ro]

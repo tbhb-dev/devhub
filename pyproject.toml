@@ -27,7 +27,7 @@ ops = [
   "ansible-core==2.21.4",
   "ansible-lint==26.10.1",
   "molecule==26.9.0",
-  "molecule-plugins[docker]==26.9.28",
+  "molecule-plugins[docker]==26.10.12",
 ]
 test = [
   "pytest>=9.0.3",

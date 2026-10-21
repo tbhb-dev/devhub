@@ -582,8 +582,10 @@ uv run pip-audit --cache-dir "$work/cache" --locked "$work"
 # infra/ansible/.collections. lint-ansible and test-ansible touch no real
 # host; the ops:* tasks do, through tools/ops-ansible.sh.
 
+# Ansible needs UTF-8 even when the commit gates set LC_ALL=C.
 [tasks.install-ansible]
 description = "Install the pinned Ansible collections into infra/ansible/.collections"
+env = { LC_ALL = "C.UTF-8" }
 dir = "{{config_root}}/infra/ansible"
 run = "uv run --group ops ansible-galaxy collection install -r requirements.yml -p .collections"
 
@@ -591,6 +593,7 @@ run = "uv run --group ops ansible-galaxy collection install -r requirements.yml 
 # sees both sources the ops tasks pass.
 [tasks.lint-ansible]
 description = "Lint the Ansible tree and syntax-check the playbooks against a stub inventory"
+env = { LC_ALL = "C.UTF-8" }
 depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
 run = [
@@ -604,7 +607,7 @@ run = [
 description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
 depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
-env = { ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
+env = { LC_ALL = "C.UTF-8", ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
 run = [
   "bats {{config_root}}/tools/ops-ansible-ssh.bats",
   "for scenario in roles/*/molecule; do (cd \"${scenario%/molecule}\" && uv run --group ops molecule test) || exit; done",
@@ -614,14 +617,17 @@ run = [
 # check and apply also take a playbook name first; see the script header.
 [tasks."ops:verify"]
 description = "Run the verify playbook against the real hosts as ops-ro"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh verify"
 
 [tasks."ops:check"]
 description = "Dry-run a playbook against the real hosts as ops, with --check --diff"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh check"
 
 [tasks."ops:apply"]
 description = "Apply a playbook to the real hosts as ops; operator-only, refused without a terminal"
+env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh apply"
 
 # --- JS/TS and nx tasks (upstream candidate: pnpm pin and nx tasks, not yet filed) ---

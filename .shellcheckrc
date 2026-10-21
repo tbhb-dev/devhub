@@ -6,8 +6,6 @@
 # that command with a reason. SC2155, its counterpart for local and export,
 # is on by default and stays on.
 #
-# Neither this nor tools/check-curl-fail.sh sees inside a command string
-# that runs elsewhere: what tools/nas.sh sends to the host's sh, and the
-# scripts tools/smoke.sh and the stubs hand to a container's sh, are text to
-# both, so a status those strings mask has to be caught in review.
+# Shellcheck cannot inspect command strings sent to another shell; review
+# those strings for masked statuses too.
 enable=check-extra-masked-returns

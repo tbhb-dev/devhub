@@ -6,7 +6,8 @@ description = "Build every binary into the bin directory"
 run = '''
 #!/usr/bin/env bash
 set -eu
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$(bash "$DEVTOOLS_DIR/scripts/go-ldflags.sh")" -o bin/ ${DEVTOOLS_GO_BIN_PACKAGES:-./cmd/...} "$@"
+ldflags=$(bash "$DEVTOOLS_DIR/scripts/go-ldflags.sh")
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o bin/ ${DEVTOOLS_GO_BIN_PACKAGES:-./cmd/...} "$@"
 '''
 
 ["devtools:install"]
@@ -14,7 +15,8 @@ description = "Install every binary to GOPATH/bin"
 run = '''
 #!/usr/bin/env bash
 set -eu
-CGO_ENABLED=0 go install -trimpath -buildvcs=false -ldflags "$(bash "$DEVTOOLS_DIR/scripts/go-ldflags.sh")" ${DEVTOOLS_GO_BIN_PACKAGES:-./cmd/...} "$@"
+ldflags=$(bash "$DEVTOOLS_DIR/scripts/go-ldflags.sh")
+CGO_ENABLED=0 go install -trimpath -buildvcs=false -ldflags "$ldflags" ${DEVTOOLS_GO_BIN_PACKAGES:-./cmd/...} "$@"
 '''
 
 ["devtools:format-go"]
@@ -60,7 +62,7 @@ golangci-lint run --modules-download-mode=${DEVTOOLS_GO_MODULES_MODE:-readonly} 
 
 ["devtools:lint-go-arch"]
 description = "Enforce intra-project layering rules from .go-arch-lint.yml"
-run = "go-arch-lint check"
+run = 'uv run --script "$DEVTOOLS_DIR/scripts/lint-go-arch.py"'
 
 ["devtools:lint-go-all"]
 description = "Aggregate every Go-flavored lint gate"
@@ -212,7 +214,8 @@ run = '''
 set -euo pipefail
 rm -rf coverage.covdata.merged
 mkdir -p coverage.covdata.merged
-go tool covdata merge -i="$(ls -d "$usage_slotsdir"/*/ | paste -sd, -)" -o=coverage.covdata.merged
+inputs=$(ls -d "$usage_slotsdir"/*/ | paste -sd, -)
+go tool covdata merge -i="$inputs" -o=coverage.covdata.merged
 go tool covdata textfmt -i=coverage.covdata.merged -o=coverage.out
 go tool gocover-cobertura < coverage.out > coverage.xml
 '''
@@ -240,7 +243,16 @@ go tool govulncheck -format sarif ${DEVTOOLS_GO_PACKAGES:-./...} > "$usage_file"
 
 ["devtools:gomodscan"]
 description = "Scan each vendored module for supply-chain concerns in one pass"
-run = "go tool gomodscan"
+run = '''
+#!/usr/bin/env bash
+set -uo pipefail
+go tool gomodscan
+rc=$?
+if [ "$rc" -gt 1 ]; then
+  echo "gomodscan: scan could not run; check network access to the scanner services and retry." >&2
+fi
+exit "$rc"
+'''
 
 ["devtools:gomodscan-sarif"]
 description = "Emit the gomodscan findings as SARIF to <file> for the security.yml upload"
@@ -272,7 +284,14 @@ run = '''
 set -euo pipefail
 go mod tidy
 go mod vendor
-if ! git diff --exit-code -- go.mod go.sum vendor/; then
+rc=0
+git diff --exit-code -- go.mod go.sum vendor/ || rc=1
+untracked=$(git ls-files --others --exclude-per-directory=.gitignore -- go.mod go.sum vendor/)
+if [ -n "$untracked" ]; then
+    printf '%s\n' "$untracked"
+    rc=1
+fi
+if [ "$rc" -ne 0 ]; then
     echo "vendor drift detected — run 'mise run devtools:vendor' and commit" >&2
     exit 1
 fi

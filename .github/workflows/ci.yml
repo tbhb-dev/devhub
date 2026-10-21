@@ -79,7 +79,8 @@ jobs:
       - name: Install guard-markdown
         run: |
           mise run install-guard-markdown
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          gobin=$(go env GOPATH)
+          echo "$gobin/bin" >> "$GITHUB_PATH"
 
       - name: Lint
         run: mise run lint

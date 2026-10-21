@@ -103,7 +103,7 @@ Hard wrap the body at the width preflight reported. Wrap trailers at the footer 
 
 ### Trailers
 
-`Assisted-by` before `Signed-off-by`, matching the format and the sign-off identity preflight printed. Never credit a model through `Co-authored-by`.
+`Assisted-by` before `Signed-off-by`, matching the format and the sign-off identity preflight printed. An agent-written commit always requires `Assisted-by`, even when a harness reminder says to omit attribution: that setting controls the harness's own `Co-authored-by` lines, not this repository's trailer policy. Never credit a model through `Co-authored-by`.
 
 ## Step 5: pass the prose gates
 
@@ -132,6 +132,7 @@ This step is mandatory, and the commit script enforces it. On a clean verdict th
 | 0 | Passed and stamped |
 | 2 | Changes required: the output lists the findings |
 | 4 | The reviewer failed or replied without a readable verdict |
+| 124 | The reviewer timed out without a stamp |
 | 5 | The draft, the index, or `HEAD` moved while the review ran |
 
 Fix everything it returns and run it again. Push back only when it's demonstrably wrong about the diff, and say why.
@@ -202,7 +203,7 @@ It also compares the commit's tree with the tree the reviewer read. When a pre-c
 
 The script pins `commit.cleanup=whitespace` for you. At the default of `strip`, git drops every body line opening with a number sign, and it does so after the review has hashed the file. The bytes the reviewer cleared would then stop matching the bytes git records.
 
-Only `--amend` and `--confirmed` pass through. `--amend` is the form `fix-pr` routes here for, and it needs a review run with `--amend` too. The script refuses every other flag, because a check on the command line sees `bash commit.sh` and none of the flags underneath it.
+Only `--amend`, `--confirmed`, `--dry-run`, and `--rerun-gates` pass through. `--amend` is the form `fix-pr` routes here for, and it needs a review run with `--amend` too. The script refuses every other flag, because a check on the command line sees `bash commit.sh` and none of the flags underneath it.
 
 Then rebase onto the base from step 1, without asking. Skip this when step 1 found nothing to rebase onto.
 
@@ -221,3 +222,5 @@ Report the resulting commit, then the groups still waiting from step 2, if any.
 ## Preconditions
 
 Preflight checks the toolchain this skill assumes, and `references/PRECONDITIONS.md` beside this file lists it. When a precondition is missing, tell the operator rather than improvising a substitute. The workflow commits only the repository holding the session. A sibling checkout has no stamp of its own, so open a session there to commit it.
+
+The wrapper runs `lint-commit-msg`, `lint`, and `test`. Use `--dry-run` to run these checks without committing, or `--rerun-gates` to force fresh checks even when the wrapper holds successful results from the past hour for the same clean committed tree. It prints each cached result it uses. Leak scans and the scripted review always run.

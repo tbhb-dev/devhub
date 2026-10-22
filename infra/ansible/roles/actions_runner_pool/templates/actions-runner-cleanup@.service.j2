@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Retry the pending cleanup of GitHub Actions runner slot %i
+Documentation=https://docs.github.com/actions/hosting-your-own-runners
+# Only while a start's cleanup is pending.
+ConditionPathExists=%S/actions-runner-slot-%i/pending
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=DOCKER_HOST=unix://%t/docker.sock
+StateDirectory=actions-runner-slot-%i
+StateDirectoryMode=0700
+# The stop phase alone, never the start phase, so it starts no job. Under
+# the slot's lock, it acts only while the slot unit is inactive or failed.
+ExecStart=%h/.local/bin/actions-runner-slot-stop --retry %i
+# The stop phase ends within the stop budget.
+TimeoutStartSec={{ actions_runner_pool_cleanup_seconds + 15 }}

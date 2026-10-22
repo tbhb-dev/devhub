@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Docker data root of the rootless daemon's service user
+# The service user's systemd instance runs the rootless daemon. It requires
+# this mount, so the daemon never starts on the directory underneath, and
+# stopping the mount stops the daemon.
+Before=user@{{ docker_rootless_uid }}.service
+RequiresMountsFor={{ docker_rootless_data_image }}
+
+[Mount]
+What={{ docker_rootless_data_image }}
+# Root mounts inside the service user's home, which that user could have
+# changed while the daemon ran. systemd refuses a mount path with a link
+# anywhere on the way, so the mount can't land elsewhere.
+Where={{ docker_rootless_data_root }}
+Type=ext4
+Options=loop
+
+[Install]
+RequiredBy=user@{{ docker_rootless_uid }}.service

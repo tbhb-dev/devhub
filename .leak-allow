@@ -15,3 +15,5 @@
 ^apm_modules/
 # The repository rules spell out the shapes they look for.
 ^\.leak-patterns$
+# The runner pool's egress policy lists the private ranges it blocks.
+^infra/ansible/roles/actions_runner_pool/vars/main\.yml$

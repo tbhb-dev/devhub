@@ -1,0 +1,1770 @@
+---
+# Nothing here reaches GitHub or 1Password. The start phase talks to a
+# stub API on loopback, which a path prefix switches between scenarios,
+# and a stub op. Its dry run must make no docker call, which a stub docker
+# that records every call checks. files/slot_lifecycle.py runs the start
+# and stop phases cell by cell against its own stub API, op, docker and
+# sleep, then the slot units under the service user's systemd with the
+# stand-in image, and checks the invariants from the README. The real runs
+# start the stand-in image, built here from busybox, which checks the JIT
+# config on its stdin and exits. The only outside traffic is one pull of a
+# small public image, with the egress table opened for the pull and the
+# stub APIs and restored right after.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    actions_runner_pool_user: ghrunner
+    actions_runner_pool_home: /var/lib/ghrunner
+    actions_runner_pool_subid_start: 524288
+    actions_runner_pool_subid_count: 65536
+    actions_runner_pool_test: /opt/runner-pool-test
+    actions_runner_pool_token: example-service-account-token
+    actions_runner_pool_busybox: busybox@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+    # Test only: the real runs' env file names this image instead of the pinned runner.
+    actions_runner_pool_stand_in: runner-pool-stand-in:test
+    actions_runner_pool_path: /usr/local/bin:/usr/bin:/bin
+    actions_runner_pool_stub_path: >-
+      {{ actions_runner_pool_test }}/stubs:{{ actions_runner_pool_test }}/stub-docker:{{ actions_runner_pool_path }}
+    actions_runner_pool_docker_root: /var/lib/ghrunner/.local/share/docker
+    # The start phase, the stop phase, their library, and the settings.
+    actions_runner_pool_scripts:
+      - .local/bin/actions-runner-slot
+      - .local/bin/actions-runner-slot-stop
+      - .local/lib/actions-runner/actions-runner-slot-lib.sh
+      - .config/actions-runner/pool.env
+    actions_runner_pool_calls:
+      token: POST /app/installations/12345678/access_tokens
+      list: GET /orgs/example-org/actions/runners?per_page=100&page=1
+      jit: POST /orgs/example-org/actions/runners/generate-jitconfig
+      delete: DELETE /orgs/example-org/actions/runners/42
+      revoke: DELETE /installation/token
+    actions_runner_pool_probe_allowed: 192.0.2.1
+    actions_runner_pool_probe_blocked: >-
+      {{ actions_runner_pool_egress_blocked_v4[0] | regex_replace('0/[0-9]+$', '1') }}
+    actions_runner_pool_probe: >-
+      import socket, sys;
+      socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"probe", (sys.argv[1], 9))
+  tasks:
+    - name: Read the blocked ranges
+      ansible.builtin.include_vars:
+        file: ../../vars/main.yml
+
+    - name: Read the service user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ actions_runner_pool_user }}"
+
+    - name: Record the service user's ID and environment
+      ansible.builtin.set_fact:
+        actions_runner_pool_uid: "{{ ansible_facts.getent_passwd[actions_runner_pool_user][1] }}"
+        actions_runner_pool_env:
+          XDG_RUNTIME_DIR: /run/user/{{ ansible_facts.getent_passwd[actions_runner_pool_user][1] }}
+          DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd[actions_runner_pool_user][1] }}/docker.sock
+
+    - name: Read the pool's user units as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      environment: "{{ actions_runner_pool_env }}"
+      block:
+        - name: Read the units' boot state
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: >-
+              systemctl --user is-enabled
+              actions-runner@1.service actions-runner@2.service actions-runner-prune.timer
+              actions-runner-cleanup@1.timer actions-runner-cleanup@2.timer
+          register: actions_runner_pool_enabled
+          changed_when: false
+
+        - name: Read the timers' state
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: >-
+              systemctl --user is-active
+              actions-runner-prune.timer actions-runner-cleanup@1.timer actions-runner-cleanup@2.timer
+          register: actions_runner_pool_timer
+          changed_when: false
+
+        - name: Read the slot template's restart policy
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: >-
+              systemctl --user show actions-runner@1.service
+              --property=Restart,RestartUSec,RestartSteps,RestartMaxDelayUSec,RestartPreventExitStatus,SuccessExitStatus
+              --property=StartLimitBurst,StartLimitIntervalUSec,ExecCondition,ExecStart,ExecStopPost,KillMode
+              --property=TimeoutStopUSec,StateDirectory,StateDirectoryMode,RuntimeDirectory
+          register: actions_runner_pool_slot_unit
+          changed_when: false
+
+        - name: Read the cleanup retry service
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: >-
+              systemctl --user show actions-runner-cleanup@1.service
+              --property=Type,ExecStart,TimeoutStartUSec,StateDirectory,Requires,Wants
+          register: actions_runner_pool_cleanup_unit
+          changed_when: false
+
+        - name: Read the rootless daemon's environment
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl --user show docker.service --property=Environment --value
+          register: actions_runner_pool_daemon_env
+          changed_when: false
+
+        - name: Read the slots' state
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl --user is-active actions-runner@1.service actions-runner@2.service
+          register: actions_runner_pool_slot_state
+          changed_when: false
+          failed_when: false
+
+        - name: Parse the supervisor's scripts
+          ansible.builtin.command:
+            cmd: bash -n {{ actions_runner_pool_home }}/{{ item }}
+          loop: "{{ actions_runner_pool_scripts[:3] }}"
+          changed_when: false
+
+    # The stop timeout as the role rendered it, the stop budget, and the
+    # stop phase's deadline, which the dry run's check compares with the
+    # phases' own bounds.
+    - name: Read the rendered slot unit, the settings and the stop phase
+      ansible.builtin.slurp:
+        src: "{{ actions_runner_pool_home }}/{{ item }}"
+      loop:
+        - .config/systemd/user/actions-runner@.service
+        - .config/actions-runner/pool.env
+        - .local/bin/actions-runner-slot-stop
+      register: actions_runner_pool_rendered
+
+    - name: Read the supervisor files
+      ansible.builtin.stat:
+        path: "{{ actions_runner_pool_home }}/{{ item }}"
+      loop: "{{ actions_runner_pool_scripts }}"
+      register: actions_runner_pool_files
+
+    - name: Read the egress unit's state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl {{ item }} actions-runner-egress.service
+      loop: [is-enabled, is-active]
+      register: actions_runner_pool_egress_state
+      changed_when: false
+
+    - name: Read what the service user's systemd instance requires
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl show user@{{ actions_runner_pool_uid }}.service --property=Requires --value
+      register: actions_runner_pool_user_requires
+      changed_when: false
+
+    - name: Read the egress table
+      ansible.builtin.command:
+        cmd: nft list table inet actions_runner_egress
+      register: actions_runner_pool_table
+      changed_when: false
+
+    - name: Check that the sink table survived converge
+      ansible.builtin.command:
+        cmd: nft list table inet runner_probe_sink
+      changed_when: false
+
+    - name: Read rootlesskit's and pasta's command lines
+      ansible.builtin.command:
+        cmd: pgrep -a -u {{ actions_runner_pool_user }} -f '^(rootlesskit|pasta(\.avx2)?) '
+      register: actions_runner_pool_rootlesskit
+      changed_when: false
+
+    - name: Check the units, the daemon's loopback setting and the egress table
+      vars:
+        actions_runner_pool_unit_lines: "{{ actions_runner_pool_slot_unit.stdout_lines }}"
+        actions_runner_pool_stop_posts: "{{ actions_runner_pool_unit_lines | select('match', 'ExecStopPost=') | list }}"
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_enabled.stdout_lines == ['enabled'] * 5
+          - actions_runner_pool_timer.stdout_lines == ['active'] * 3
+          - "'Restart=always' in actions_runner_pool_unit_lines"
+          - "'RestartUSec=10s' in actions_runner_pool_unit_lines"
+          - "'RestartSteps=6' in actions_runner_pool_unit_lines"
+          - "'RestartMaxDelayUSec=15min' in actions_runner_pool_unit_lines"
+          # No exit status of the main process, which after the exec is the
+          # container's, stops the restarts; the condition check does.
+          - "'RestartPreventExitStatus=' in actions_runner_pool_unit_lines"
+          - >-
+            'argv[]=' ~ actions_runner_pool_home ~ '/.local/bin/actions-runner-slot --condition 1 ;'
+            in (actions_runner_pool_unit_lines | select('match', 'ExecCondition=') | first)
+          # 128 plus HUP, INT or TERM: a container that ended on the stop
+          # signal, which the docker client passes on.
+          - "'SuccessExitStatus=129 130 143' in actions_runner_pool_unit_lines"
+          - "'StartLimitBurst=20' in actions_runner_pool_unit_lines"
+          - "'StartLimitIntervalUSec=1h' in actions_runner_pool_unit_lines"
+          # The stop signal goes to the main process alone, so the start
+          # phase's calls in flight finish.
+          - "'KillMode=mixed' in actions_runner_pool_unit_lines"
+          # The pending cleanup outlives a stop and a reboot.
+          - "'StateDirectory=actions-runner-slot-1' in actions_runner_pool_unit_lines"
+          - "'StateDirectoryMode=0700' in actions_runner_pool_unit_lines"
+          - "'RuntimeDirectory=' in actions_runner_pool_unit_lines"
+          # The retry runs the stop phase alone, within the stop timeout,
+          # in the slot's state directory, and starts no slot.
+          - "'Type=oneshot' in actions_runner_pool_cleanup_unit.stdout_lines"
+          - >-
+            'argv[]=' ~ actions_runner_pool_home ~ '/.local/bin/actions-runner-slot-stop --retry 1 ;'
+            in actions_runner_pool_cleanup_unit.stdout
+          - "'TimeoutStartUSec=2min 15s' in actions_runner_pool_cleanup_unit.stdout_lines"
+          - "'StateDirectory=actions-runner-slot-1' in actions_runner_pool_cleanup_unit.stdout_lines"
+          - actions_runner_pool_cleanup_unit.stdout is not search('actions-runner@')
+          - >-
+            'argv[]=' ~ actions_runner_pool_home ~ '/.local/bin/actions-runner-slot 1 ;'
+            in actions_runner_pool_slot_unit.stdout
+          # The stop phase, whose failure counts, then the counter's reset,
+          # whose failure doesn't.
+          - actions_runner_pool_stop_posts | length == 2
+          - >-
+            'argv[]=' ~ actions_runner_pool_home ~ '/.local/bin/actions-runner-slot-stop 1 ;'
+            in actions_runner_pool_stop_posts[0]
+          - "'ignore_errors=no' in actions_runner_pool_stop_posts[0]"
+          - "'systemctl --user reset-failed actions-runner@1.service' in actions_runner_pool_stop_posts[1]"
+          - "'ignore_errors=yes' in actions_runner_pool_stop_posts[1]"
+          # Host loopback stays off explicitly, so pasta maps no gateway to the host's 127.0.0.1.
+          - "'DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true' in actions_runner_pool_daemon_env.stdout.split()"
+          - actions_runner_pool_rootlesskit.stdout is search('(?m)^[0-9]+ rootlesskit .*--disable-host-loopback')
+          - actions_runner_pool_rootlesskit.stdout is search('(?m)^[0-9]+ pasta(\.avx2)? .*--no-map-gw')
+          # actions_runner_pool_start is off here, so no slot has run.
+          - actions_runner_pool_slot_state.stdout_lines == ['inactive', 'inactive']
+          - >-
+            actions_runner_pool_files.results | map(attribute='stat.mode') | list
+            == ['0700', '0700', '0600', '0600']
+          - actions_runner_pool_files.results | map(attribute='stat.pw_name') | unique == [actions_runner_pool_user]
+          - actions_runner_pool_egress_state.results | map(attribute='stdout') | list == ['enabled', 'active']
+          - "'actions-runner-egress.service' in actions_runner_pool_user_requires.stdout.split()"
+          - "'type filter hook output priority filter; policy accept;' in actions_runner_pool_table.stdout"
+          # Only packets from the service user's sockets reach the drops; a
+          # packet with no socket, from any user, passes.
+          - "'meta skuid ' ~ actions_runner_pool_uid ~ ' jump service_user' in actions_runner_pool_table.stdout"
+          - actions_runner_pool_table.stdout is search('fib daddr type local counter packets [0-9]+ bytes [0-9]+ drop')
+          - actions_runner_pool_table.stdout is search('ip daddr @blocked_v4 counter packets [0-9]+ bytes [0-9]+ drop')
+          - actions_runner_pool_table.stdout is search('ip6 daddr @blocked_v6 counter packets [0-9]+ bytes [0-9]+ drop')
+
+    - name: Create the test directories
+      ansible.builtin.file:
+        path: "{{ actions_runner_pool_test }}/{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        mode: "0755"
+      loop:
+        - {path: "", owner: root}
+        - {path: stubs, owner: root}
+        - {path: stub-docker, owner: root}
+        - {path: key, owner: root}
+        - {path: stand-in, owner: root}
+        - {path: log, owner: "{{ actions_runner_pool_user }}"}
+        - {path: log/real, owner: root}
+
+    - name: Clear the logs of an earlier verify
+      ansible.builtin.file:
+        path: "{{ actions_runner_pool_test }}/log/{{ item }}"
+        state: absent
+      loop: [api.log, op.log, docker.log, dry-run, scripts, units]
+
+    # One line per call: the caller the test named in its environment, or
+    # unknown, then the arguments and the token.
+    - name: Install the stub op, which records its call and prints the test key
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/stubs/op"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          printf '%s\targv=%s\ttoken=%s\n' "${RUNNER_POOL_TEST_CALLER:-unknown}" "$*" "$OP_SERVICE_ACCOUNT_TOKEN" \
+            >>{{ actions_runner_pool_test }}/log/op.log
+          cat {{ actions_runner_pool_test }}/key/app-key.pem
+
+    - name: Install the stub docker, which records any call and fails
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/stub-docker/docker"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          printf '%s\n' "$*" >>{{ actions_runner_pool_test }}/log/docker.log
+          exit 99
+
+    - name: Install the stub GitHub API
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/stub_api.py"
+        mode: "0644"
+        content: |
+          import json
+          import sys
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+          from urllib.parse import urlsplit
+
+          PORT, LOG = int(sys.argv[1]), sys.argv[2]
+          MINTED = [0]
+          RESPONSES = {
+              ("GET", "runners"): (200, {"total_count": 0, "runners": []}, {}),
+              ("POST", "generate-jitconfig"): (
+                  201, {"runner": {"id": 42}, "encoded_jit_config": "example-jit-config"}, {}
+              ),
+              ("DELETE", "42"): (204, None, {}),
+              ("DELETE", "token"): (204, None, {}),
+          }
+          # A first path segment that names a scenario replaces some answers.
+          SCENARIOS = {
+              # An ephemeral runner that ran a job has already removed itself.
+              "real": {("DELETE", "42"): (404, {"message": "Not Found"}, {})},
+          }
+
+
+          class Stub(BaseHTTPRequestHandler):
+              def answer(self):
+                  length = int(self.headers.get("Content-Length") or 0)
+                  scenario, path = "", self.path
+                  if path.split("/")[1] in SCENARIOS:
+                      scenario = path.split("/")[1]
+                      path = path[len(scenario) + 1:]
+                  record = {
+                      "scenario": scenario,
+                      "call": self.command + " " + path,
+                      "authorization": self.headers.get("Authorization"),
+                      "accept": self.headers.get("Accept"),
+                      "api_version": self.headers.get("X-GitHub-Api-Version"),
+                      "body": self.rfile.read(length).decode() if length else "",
+                  }
+                  with open(LOG, "a") as log:
+                      log.write(json.dumps(record) + "\n")
+                  responses = {**RESPONSES, **SCENARIOS.get(scenario, {})}
+                  key = (self.command, urlsplit(path).path.rsplit("/", 1)[-1])
+                  status, payload, headers = responses.get(key, (404, {"message": "Not Found"}, {}))
+                  # Each token request gets a token of its own.
+                  if key == ("POST", "access_tokens"):
+                      MINTED[0] += 1
+                      status, payload = 201, {"token": f"ghs_example_{MINTED[0]}", "expires_at": "2099-01-01T00:00:00Z"}
+                  self.send_response(status)
+                  # GitHub sends these on every response, so they alone mean no rate limit.
+                  self.send_header("X-RateLimit-Remaining", "4999")
+                  self.send_header("X-RateLimit-Reset", "4102444800")
+                  for name, value in headers.items():
+                      self.send_header(name, value)
+                  data = b"" if payload is None else json.dumps(payload).encode()
+                  self.send_header("Content-Length", str(len(data)))
+                  self.end_headers()
+                  self.wfile.write(data)
+
+              do_GET = do_POST = do_DELETE = answer
+
+              def log_message(self, *args):
+                  pass
+
+
+          HTTPServer(("127.0.0.1", PORT), Stub).serve_forever()
+
+    - name: Install the lifecycle tests
+      ansible.builtin.copy:
+        src: slot_lifecycle.py
+        dest: "{{ actions_runner_pool_test }}/slot_lifecycle.py"
+        mode: "0644"
+
+    - name: Install the JWT checker
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/check_jwt.py"
+        mode: "0644"
+        content: |
+          import base64
+          import json
+          import subprocess
+          import sys
+
+          jwt, public_key = sys.argv[1], sys.argv[2]
+          header, claims, signature = jwt.split(".")
+
+
+          def decode(part):
+              return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+          sig_path = public_key + ".sig"
+          with open(sig_path, "wb") as sig:
+              sig.write(decode(signature))
+          verified = subprocess.run(
+              ["openssl", "dgst", "-sha256", "-verify", public_key, "-signature", sig_path],
+              input=(header + "." + claims).encode(),
+              capture_output=True,
+          )
+          print(json.dumps({
+              "header": json.loads(decode(header)),
+              "claims": json.loads(decode(claims)),
+              "verified": verified.returncode == 0 and b"Verified OK" in verified.stdout,
+          }))
+
+    - name: Generate a throwaway App key
+      ansible.builtin.command:
+        cmd: >-
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048
+          -out {{ actions_runner_pool_test }}/key/app-key.pem
+        creates: "{{ actions_runner_pool_test }}/key/app-key.pem"
+
+    - name: Derive the throwaway key's public half
+      ansible.builtin.command:
+        cmd: openssl pkey -in app-key.pem -pubout -out app-key.pub
+        chdir: "{{ actions_runner_pool_test }}/key"
+        creates: "{{ actions_runner_pool_test }}/key/app-key.pub"
+
+    - name: Let the service user read the throwaway key
+      ansible.builtin.file:
+        path: "{{ actions_runner_pool_test }}/key/app-key.pem"
+        mode: "0644"
+
+    - name: Read the throwaway key
+      ansible.builtin.slurp:
+        src: "{{ actions_runner_pool_test }}/key/app-key.pem"
+      register: actions_runner_pool_key
+
+    - name: Place a stand-in service-account token as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_home }}/.config/actions-runner/op-service-account-token"
+        content: "{{ actions_runner_pool_token }}\n"
+        mode: "0400"
+
+    # The real runs' settings: the stub API's real scenario and the stand-in image.
+    - name: Write the test env file, as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          umask 077
+          sed -e "s|^ACTIONS_RUNNER_POOL_API_URL=.*|ACTIONS_RUNNER_POOL_API_URL=http://127.0.0.1:18089/real|" \
+            -e "s|^ACTIONS_RUNNER_POOL_IMAGE=.*|ACTIONS_RUNNER_POOL_IMAGE={{ actions_runner_pool_stand_in }}|" \
+            {{ actions_runner_pool_home }}/.config/actions-runner/pool.env >{{ actions_runner_pool_test }}/log/real.env
+        executable: /bin/bash
+        chdir: /
+      changed_when: true
+
+    # The stand-in job reads stdin to its end, as the runner does, then acts
+    # on the JIT config it got, which it knows only by hash, so the image
+    # holds no copy: a short clean job, a job that runs until a TERM and
+    # exits 143, or one that exits 137. Any other config fails.
+    - name: Write the stand-in runner image's build context
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/stand-in/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: Dockerfile
+          content: |
+            FROM {{ actions_runner_pool_busybox }}
+            COPY run.sh /home/runner/run.sh
+            RUN printf '#!/bin/sh\nexec /bin/sh "$@"\n' >/bin/bash \
+             && chmod 0755 /bin/bash /home/runner/run.sh
+        - name: run.sh
+          content: |
+            #!/bin/sh
+            cat >/dev/null
+            case "$(printf %s "$ACTIONS_RUNNER_INPUT_JITCONFIG" | sha256sum)" in
+            "{{ 'example-jit-config' | hash('sha256') }}  -") sleep 2 ;;
+            "{{ 'example-jit-config-hold' | hash('sha256') }}  -")
+              trap 'exit 143' TERM
+              sleep 120 &
+              wait
+              exit 1
+              ;;
+            "{{ 'example-jit-config-ignore' | hash('sha256') }}  -")
+              sleep 300 &
+              wait
+              ;;
+            "{{ 'example-jit-config-137' | hash('sha256') }}  -") exit 137 ;;
+            "{{ 'example-jit-config-78' | hash('sha256') }}  -") exit 78 ;;
+            "{{ 'example-jit-config-143' | hash('sha256') }}  -") exit 143 ;;
+            "{{ 'example-jit-config-1' | hash('sha256') }}  -") exit 1 ;;
+            *) exit 1 ;;
+            esac
+      loop_control:
+        label: "{{ item.name }}"
+
+    # A file, so the secrets never appear on a command line the run samples.
+    - name: Write the secrets to look for during the real runs
+      ansible.builtin.copy:
+        dest: "{{ actions_runner_pool_test }}/key/patterns"
+        mode: "0644"
+        content: |
+          example-jit-config
+          ghs_example
+
+    - name: Exercise the pool with the egress table opened for the service user
+      block:
+        # The table's file restores it on reload, in the always section.
+        - name: Open the egress table for the service user
+          ansible.builtin.command:
+            cmd: nft insert rule inet actions_runner_egress output meta skuid {{ actions_runner_pool_uid }} accept
+          changed_when: true
+
+        - name: Pull a small image by digest and make a dangling one, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              docker pull --quiet {{ actions_runner_pool_busybox }} >/dev/null
+              tar -cf - -T /dev/null | docker import --message dangling - 2>/dev/null
+            executable: /bin/bash
+            chdir: /
+          register: actions_runner_pool_images
+          changed_when: true
+
+        - name: Build the stand-in runner image, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            cmd: >-
+              docker build --quiet --network none --tag {{ actions_runner_pool_stand_in }}
+              {{ actions_runner_pool_test }}/stand-in
+            chdir: /
+          changed_when: true
+
+        - name: Start the stub API
+          ansible.builtin.command:
+            cmd: >-
+              systemd-run --unit=runner-pool-stub-api --collect
+              python3 {{ actions_runner_pool_test }}/stub_api.py 18089 {{ actions_runner_pool_test }}/log/api.log
+          changed_when: true
+
+        - name: Wait for the stub API
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: 18089
+            timeout: 30
+
+        # The start phase alone, outside systemd, so the test gives it the
+        # state directory systemd would.
+        - name: Create the dry run's state directory, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          ansible.builtin.file:
+            path: "{{ actions_runner_pool_test }}/log/dry-run"
+            state: directory
+            mode: "0700"
+
+        - name: Run the start phase's dry run with the stubs first on its PATH
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment:
+            PATH: "{{ actions_runner_pool_stub_path }}"
+            STATE_DIRECTORY: "{{ actions_runner_pool_test }}/log/dry-run"
+            RUNNER_POOL_TEST_CALLER: dry-run
+          ansible.builtin.command:
+            argv: ["{{ actions_runner_pool_home }}/.local/bin/actions-runner-slot", --dry-run, "1"]
+            chdir: /
+          register: actions_runner_pool_dry_run
+          changed_when: false
+
+        - name: Read the dry run's pending cleanup
+          ansible.builtin.slurp:
+            src: "{{ actions_runner_pool_test }}/log/dry-run/pending"
+          register: actions_runner_pool_dry_run_id
+
+        # Each cell runs as the service user, with the suite's stubs first
+        # on its PATH, which the suite checks before it starts.
+        - name: Run the start and stop phases' tests as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment:
+            PATH: "{{ actions_runner_pool_path }}"
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -I
+              - "{{ actions_runner_pool_test }}/slot_lifecycle.py"
+              - scripts
+              - "{{ actions_runner_pool_home }}/.local/bin/actions-runner-slot"
+              - "{{ actions_runner_pool_home }}/.local/bin/actions-runner-slot-stop"
+              - "{{ actions_runner_pool_home }}/.local/lib/actions-runner/actions-runner-slot-lib.sh"
+              - "{{ actions_runner_pool_test }}/log/scripts"
+              - --base-env
+              - "{{ actions_runner_pool_home }}/.config/actions-runner/pool.env"
+            chdir: /
+          register: actions_runner_pool_scripts_run
+          changed_when: false
+          failed_when: false
+
+        # Slot 1's preflight must remove the leftover container, and slot 2's
+        # must replace a network that lets containers reach each other.
+        - name: Leave a container in slot 1 and a plain network in slot 2's name
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              docker rm --force runner-pool-leftover >/dev/null 2>&1 || true
+              docker network rm pool-slot-1 pool-slot-2 >/dev/null 2>&1 || true
+              docker create --name runner-pool-leftover --label actions-runner-pool.slot=1 \
+                {{ actions_runner_pool_busybox }} true >/dev/null
+              docker network create pool-slot-2 >/dev/null
+            executable: /bin/bash
+            chdir: /
+          changed_when: true
+
+        # Each slot's start phase execs into a job with the stand-in image,
+        # then its stop phase runs, as systemd would run it. While the runs
+        # last, a sampler records every process's command line, the job
+        # container's stored configuration and its logs, and searches the
+        # home, the runtime directory and the runs' state directories once
+        # per container.
+        - name: Start a real job in each slot with the stand-in image, sampling for the secrets
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              out={{ actions_runner_pool_test }}/log/real
+              rm -f "$out"/*
+              as_runner() {
+                runuser -u {{ actions_runner_pool_user }} -- env HOME={{ actions_runner_pool_home }} \
+                  XDG_RUNTIME_DIR=/run/user/{{ actions_runner_pool_uid }} \
+                  DOCKER_HOST=unix:///run/user/{{ actions_runner_pool_uid }}/docker.sock "$@"
+              }
+              sample() {
+                local id ids
+                while [ ! -e "$out/done" ]; do
+                  for f in /proc/[0-9]*/cmdline; do
+                    tr '\0' ' ' 2>/dev/null <"$f" || true
+                    echo
+                  done >>"$out/cmdline.txt"
+                  ids=$(as_runner docker ps --quiet --filter label=actions-runner-pool.slot) || ids=
+                  for id in $ids; do
+                    as_runner docker inspect "$id" >>"$out/inspect.json" 2>/dev/null || true
+                    as_runner docker logs "$id" >>"$out/logs.txt" 2>&1 || true
+                    if [ ! -e "$out/searched-$id" ]; then
+                      touch "$out/searched-$id"
+                      grep -rlF -D skip -f {{ actions_runner_pool_test }}/key/patterns \
+                        {{ actions_runner_pool_home }} /run/user/{{ actions_runner_pool_uid }} \
+                        {{ actions_runner_pool_test }}/log/real-state-1 \
+                        {{ actions_runner_pool_test }}/log/real-state-2 \
+                        >>"$out/files.txt" 2>/dev/null || true
+                    fi
+                  done
+                  sleep 0.1
+                done
+              }
+              sample &
+              sampler=$!
+              for slot in 1 2; do
+                # Not the slot's own state directory, whose cleanup timer
+                # would take this run's pending cleanup for a stopped slot's.
+                state={{ actions_runner_pool_test }}/log/real-state-$slot
+                as_runner rm -rf "$state"
+                as_runner mkdir -m 0700 "$state"
+                # phase CALLER ARGS...: CALLER names the run in the stub op's log.
+                phase() {
+                  as_runner env PATH={{ actions_runner_pool_test }}/stubs:{{ actions_runner_pool_path }} \
+                    ACTIONS_RUNNER_POOL_ENV={{ actions_runner_pool_test }}/log/real.env STATE_DIRECTORY="$state" \
+                    RUNNER_POOL_TEST_CALLER="$1" "${@:2}"
+                }
+                rc=0
+                phase "real-start-$slot" {{ actions_runner_pool_home }}/.local/bin/actions-runner-slot "$slot" \
+                  >"$out/slot-$slot.out" 2>"$out/slot-$slot.err" || rc=$?
+                stop_rc=0
+                phase "real-stop-$slot" SERVICE_RESULT=success EXIT_CODE=exited EXIT_STATUS="$rc" \
+                  {{ actions_runner_pool_home }}/.local/bin/actions-runner-slot-stop "$slot" \
+                  >"$out/slot-$slot.stop.out" 2>"$out/slot-$slot.stop.err" || stop_rc=$?
+                # The stop phase resolved the pending cleanup and removed it.
+                [ ! -e "$state/pending" ] || stop_rc=pending
+                echo "$rc $stop_rc"
+              done
+              touch "$out/done"
+              wait "$sampler"
+              touch "$out/files.txt" "$out/inspect.json" "$out/logs.txt"
+            executable: /bin/bash
+            chdir: /
+          register: actions_runner_pool_real
+          changed_when: true
+          failed_when: false
+
+        - name: Read the real runs' output and samples
+          ansible.builtin.command:
+            cmd: cat {{ item }}
+            chdir: "{{ actions_runner_pool_test }}/log/real"
+          loop:
+            - slot-1.out
+            - slot-2.out
+            - slot-1.err
+            - slot-2.err
+            - slot-1.stop.out
+            - slot-2.stop.out
+            - slot-1.stop.err
+            - slot-2.stop.err
+            - files.txt
+          register: actions_runner_pool_real_files
+          changed_when: false
+          failed_when: false
+
+        - name: Read the service user's journal after the real runs
+          ansible.builtin.command:
+            cmd: journalctl _UID={{ actions_runner_pool_uid }} --no-pager -o cat
+          register: actions_runner_pool_real_journal
+          changed_when: false
+          failed_when: false
+
+        # Report the captured failures before reading state that only a successful
+        # start can create. No later unit case has run or changed that state yet.
+        - name: Check the real runs' start and stop phases
+          ansible.builtin.assert:
+            that:
+              - actions_runner_pool_real.rc == 0
+              - actions_runner_pool_real.stdout_lines == ['0 0', '0 0']
+              - actions_runner_pool_real_files.results | map(attribute='rc') | unique == [0]
+              - actions_runner_pool_real_journal.rc == 0
+            fail_msg: >-
+              phases: {{ actions_runner_pool_real }}
+              output: {{ actions_runner_pool_real_files.results }}
+              journal: {{ actions_runner_pool_real_journal }}
+
+        - name: Read what the real runs left, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            cmd: "{{ item }}"
+            chdir: /
+          loop:
+            - docker ps --all --quiet --filter name=^runner-pool-leftover$
+            - docker network inspect pool-slot-1 pool-slot-2
+          register: actions_runner_pool_real_state
+          changed_when: false
+          failed_when: false
+
+        - name: Check the real runs' containers and networks before the unit cases
+          vars:
+            actions_runner_pool_leftover: "{{ actions_runner_pool_real_state.results[0].stdout }}"
+            actions_runner_pool_networks: "{{ actions_runner_pool_real_state.results[1].stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - actions_runner_pool_real_state.results | map(attribute='rc') | unique == [0]
+              # Slot 1's leftover container is gone, and each slot has its own
+              # network, created or replaced with inter-container traffic off.
+              - actions_runner_pool_leftover == ''
+              - actions_runner_pool_networks | map(attribute='Name') | list == ['pool-slot-1', 'pool-slot-2']
+              - actions_runner_pool_networks | map(attribute='Driver') | unique == ['bridge']
+              - >-
+                actions_runner_pool_networks | map(attribute='Labels') | list
+                == [{'actions-runner-pool.slot': '1'}, {'actions-runner-pool.slot': '2'}]
+              - >-
+                actions_runner_pool_networks | map(attribute='Options') | list
+                == [{'com.docker.network.bridge.enable_icc': 'false'}] * 2
+            fail_msg: >-
+              state: {{ actions_runner_pool_real_state.results }}
+              phases: {{ actions_runner_pool_real }}
+              output: {{ actions_runner_pool_real_files.results }}
+              journal: {{ actions_runner_pool_real_journal }}
+
+        # Each case writes its own drop-in, which points the slot at the
+        # suite's stub API and stub op and appends the unit's output to the
+        # case's log, and removes it afterwards.
+        - name: Exercise the slot units under the service user's systemd
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          block:
+            - name: Read the service user's systemd version
+              ansible.builtin.command: # noqa: command-instead-of-module
+                cmd: systemctl --version
+              register: actions_runner_pool_systemd
+              changed_when: false
+
+            - name: Run the slot units' tests and the systemd probes
+              environment:
+                PATH: "{{ actions_runner_pool_path }}"
+              ansible.builtin.command:
+                argv:
+                  - python3
+                  - -I
+                  - "{{ actions_runner_pool_test }}/slot_lifecycle.py"
+                  - units
+                  - "{{ actions_runner_pool_home }}/.config/actions-runner/pool.env"
+                  - "{{ actions_runner_pool_test }}/log/units"
+                  - --image
+                  - "{{ actions_runner_pool_stand_in }}"
+                chdir: /
+              register: actions_runner_pool_units_run
+              changed_when: false
+              failed_when: false
+          always:
+            - name: Stop the slots
+              ansible.builtin.systemd_service:
+                name: actions-runner@{{ item }}.service
+                scope: user
+                state: stopped
+              loop: [1, 2]
+
+            - name: Remove the test drop-ins
+              ansible.builtin.file:
+                path: "{{ actions_runner_pool_home }}/.config/systemd/user/{{ item }}.d"
+                state: absent
+              loop:
+                - actions-runner@1.service
+                - actions-runner@2.service
+                - actions-runner-cleanup@1.service
+                - actions-runner-cleanup@2.service
+                - actions-runner-cleanup@1.timer
+                - actions-runner-cleanup@2.timer
+
+            - name: Reload the user units and clear the slots' failed state
+              ansible.builtin.command: # noqa: command-instead-of-module
+                cmd: systemctl --user {{ item }}
+              loop:
+                - daemon-reload
+                - >-
+                  reset-failed actions-runner@1.service actions-runner@2.service
+                  actions-runner-cleanup@1.service actions-runner-cleanup@2.service
+              changed_when: true
+
+            - name: Restart the cleanup timers
+              ansible.builtin.systemd_service:
+                name: actions-runner-cleanup@{{ item }}.timer
+                scope: user
+                state: started
+              loop: [1, 2]
+      always:
+        - name: Stop the stub API
+          ansible.builtin.systemd_service:
+            name: runner-pool-stub-api.service
+            state: stopped
+          failed_when: false
+
+        - name: Restore the egress table
+          ansible.builtin.systemd_service:
+            name: actions-runner-egress.service
+            state: reloaded
+
+    - name: Read the stub API's requests
+      ansible.builtin.command:
+        cmd: cat {{ actions_runner_pool_test }}/log/api.log
+      register: actions_runner_pool_api_log
+      changed_when: false
+
+    - name: Read the stub op's calls
+      ansible.builtin.command:
+        cmd: cat {{ actions_runner_pool_test }}/log/op.log
+      register: actions_runner_pool_op_log
+      changed_when: false
+
+    - name: Look for a docker call from the dry run
+      ansible.builtin.stat:
+        path: "{{ actions_runner_pool_test }}/log/docker.log"
+      register: actions_runner_pool_docker_log
+
+    - name: Check the App JWT's signature and claims
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ actions_runner_pool_test }}/check_jwt.py"
+          - >-
+            {{ (actions_runner_pool_api_log.stdout_lines | map('from_json') | selectattr('scenario', 'eq', '')
+               | first).authorization | regex_replace('^Bearer ', '') }}
+          - "{{ actions_runner_pool_test }}/key/app-key.pub"
+      register: actions_runner_pool_jwt
+      changed_when: false
+
+    - name: Check the dry run
+      vars:
+        actions_runner_pool_plan: "{{ actions_runner_pool_dry_run.stdout_lines[-1] | from_json }}"
+        actions_runner_pool_docker: "{{ actions_runner_pool_plan.docker }}"
+        actions_runner_pool_requests: >-
+          {{ actions_runner_pool_api_log.stdout_lines | map('from_json') | selectattr('scenario', 'eq', '') | list }}
+        actions_runner_pool_body: "{{ actions_runner_pool_requests[2].body | from_json }}"
+        actions_runner_pool_jwt_info: "{{ actions_runner_pool_jwt.stdout | from_json }}"
+        actions_runner_pool_op_calls: "{{ actions_runner_pool_op_log.stdout_lines | map('split', '\t') | list }}"
+        actions_runner_pool_op_argv: >-
+          argv=read --no-newline {{ ['op:', 'example-vault/example-item/example-field'] | join('//') }}
+        actions_runner_pool_texts: >-
+          {{ actions_runner_pool_rendered.results | map(attribute='content') | map('b64decode') | list }}
+        actions_runner_pool_stop_timeout: >-
+          {{ actions_runner_pool_texts[0] | regex_findall('(?m)^TimeoutStopSec=([0-9]+)$') | first | int }}
+        actions_runner_pool_budget: >-
+          {{ actions_runner_pool_texts[1] | regex_findall("(?m)^ACTIONS_RUNNER_POOL_CLEANUP_SECONDS='?([0-9]+)'?$")
+             | first | int }}
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_dry_run.rc == 0
+          - actions_runner_pool_plan.event == 'dry-run'
+          # The unit's stop timeout, as rendered, outlasts the stop budget,
+          # which the start phase's bound past its first stop check and
+          # the stop phase's least time both fit, and the stop phase's
+          # deadline is that budget.
+          - actions_runner_pool_plan.cleanup_seconds == actions_runner_pool_budget
+          - actions_runner_pool_stop_timeout > actions_runner_pool_budget
+          - actions_runner_pool_plan.start_bound_seconds <= actions_runner_pool_budget
+          - actions_runner_pool_plan.stop_bound_seconds <= actions_runner_pool_budget
+          - actions_runner_pool_texts[2] is search('(?m)^    deadline=\\$ACTIONS_RUNNER_POOL_CLEANUP_SECONDS$')
+          - actions_runner_pool_plan.runner is match('^pool-' ~ (inventory_hostname | regex_escape) ~ '-1-[0-9a-f]{8}$')
+          # The runner ID and the container wait in the state directory
+          # for the stop phase.
+          - actions_runner_pool_plan.runner_id == 42
+          - >-
+            actions_runner_pool_dry_run_id.content | b64decode
+            == '{"runner_id":42,"container":"actions-runner-slot-1"}\n'
+          # The API calls, in order, with the right credential each: the dry
+          # run lists the org's runners for stale ones, registers one, then
+          # revokes the token before any job, with the token it minted.
+          - >-
+            actions_runner_pool_requests | map(attribute='call') | list
+            == ['token', 'list', 'jit', 'revoke'] | map('extract', actions_runner_pool_calls) | list
+          - actions_runner_pool_requests | map(attribute='accept') | unique == ['application/vnd.github+json']
+          - actions_runner_pool_requests | map(attribute='api_version') | unique == ['2022-11-28']
+          - actions_runner_pool_requests[1:] | map(attribute='authorization') | unique | length == 1
+          - actions_runner_pool_requests[1].authorization is match('^Bearer ghs_example_[0-9]+$')
+          - actions_runner_pool_body.name == actions_runner_pool_plan.runner
+          - actions_runner_pool_body.runner_group_id == 3
+          - actions_runner_pool_body.labels == ['self-hosted', 'tbhb-dev-private']
+          - actions_runner_pool_body.work_folder == '_work'
+          # The JWT is the App's, signed with the key op returned.
+          - actions_runner_pool_jwt_info.verified
+          - "actions_runner_pool_jwt_info.header == {'alg': 'RS256', 'typ': 'JWT'}"
+          - actions_runner_pool_jwt_info.claims.iss == '123456'
+          - actions_runner_pool_jwt_info.claims.exp - actions_runner_pool_jwt_info.claims.iat == 600
+          # The dry run read the key with op exactly once. Every call, the
+          # dry run's or a real run's, got the token from the 0400 file and
+          # a reference built from the parts. Check the real runs names
+          # every caller in order.
+          - actions_runner_pool_op_calls | selectattr('0', 'eq', 'dry-run') | list | length == 1
+          - actions_runner_pool_op_calls | map('length') | unique == [3]
+          - actions_runner_pool_op_calls | map(attribute='1') | unique == [actions_runner_pool_op_argv]
+          - actions_runner_pool_op_calls | map(attribute='2') | unique == ['token=' ~ actions_runner_pool_token]
+          # The dry run called no docker. It would have created the slot's
+          # network, inter-container traffic off, and run the pinned image
+          # on it once, limited, as the docker client the unit runs.
+          - not actions_runner_pool_docker_log.stat.exists
+          - >-
+            actions_runner_pool_plan.network == ['network', 'create', '--driver', 'bridge',
+            '--label', 'actions-runner-pool.slot=1', '--opt', 'com.docker.network.bridge.enable_icc=false',
+            'pool-slot-1']
+          - actions_runner_pool_docker[:4] == ['run', '--rm', '--interactive', '--sig-proxy=true']
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--name') + 1] == 'actions-runner-slot-1'
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--network') + 1] == 'pool-slot-1'
+          - actions_runner_pool_docker | select('eq', '--network') | list | length == 1
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--cpus') + 1] == '1'
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--memory') + 1] == '512m'
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--pids-limit') + 1] == '256'
+          - actions_runner_pool_docker[actions_runner_pool_docker.index('--security-opt') + 1] == 'no-new-privileges'
+          # One --dns per public resolver in the role's default, in order.
+          - >-
+            actions_runner_pool_docker | zip(actions_runner_pool_docker[1:]) | selectattr('0', 'eq', '--dns')
+            | map(attribute='1') | list == ['1.1.1.1', '9.9.9.9']
+          - >-
+            actions_runner_pool_docker[actions_runner_pool_docker.index('--tmpfs') + 1]
+            == '/home/runner/_work:rw,exec,uid=1001,gid=1001,mode=0700,size=256m'
+          - >-
+            'ghcr.io/actions/actions-runner@sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807'
+            in actions_runner_pool_docker
+          - >-
+            actions_runner_pool_docker
+            | select('search', 'docker[.]sock|^-v$|^--volume|^--mount|^--privileged') | list == []
+          - actions_runner_pool_docker | select('search', 'example-jit-config|ghs_example') | list == []
+          - (actions_runner_pool_dry_run.stdout ~ actions_runner_pool_dry_run.stderr) is not search('ghs_example')
+        fail_msg: >-
+          Unexpected dry run: {{ actions_runner_pool_dry_run.stdout_lines }}
+          {{ actions_runner_pool_api_log.stdout_lines }} op: {{ actions_runner_pool_op_log.stdout_lines }}
+
+    - name: Read the start and stop phases' results
+      ansible.builtin.slurp:
+        src: "{{ actions_runner_pool_test }}/log/scripts/results.json"
+      register: actions_runner_pool_scripts_results
+
+    - name: Check the start and stop phases
+      vars:
+        actions_runner_pool_cells: "{{ actions_runner_pool_scripts_results.content | b64decode | from_json }}"
+        actions_runner_pool_by_name: >-
+          {{ actions_runner_pool_cells | items2dict(key_name='name', value_name='passed') }}
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_scripts_run.rc == 0
+          - actions_runner_pool_cells | rejectattr('passed') | list == []
+          # Each API answer at each call, the stop phase's DELETE answers
+          # and its deadline, the signals, the large config's pipe, and the
+          # reconcile cells run by name.
+          - actions_runner_pool_by_name['start/ok']
+          - actions_runner_pool_by_name['start/token-429']
+          - actions_runner_pool_by_name['start/list-403-rate']
+          - actions_runner_pool_by_name['start/list-403-secondary']
+          - actions_runner_pool_by_name['start/list-403-permission']
+          - actions_runner_pool_by_name['start/jit-timeout']
+          - actions_runner_pool_by_name['start/large-config']
+          - actions_runner_pool_by_name['signal/info-TERM']
+          - actions_runner_pool_by_name['signal/list-TERM']
+          - actions_runner_pool_by_name['stop/500-204']
+          - actions_runner_pool_by_name['stop/500']
+          - actions_runner_pool_by_name['stop/timeout']
+          - actions_runner_pool_by_name['stop/429-capped']
+          - actions_runner_pool_by_name['stop/no-id']
+          - actions_runner_pool_by_name['reconcile/edge-1']
+          - actions_runner_pool_by_name['reconcile/edge']
+          - actions_runner_pool_by_name['reconcile/deadline']
+          # No job after a revocation GitHub didn't confirm, the pending
+          # cleanup's lock and retry, the condition check, and how the stop
+          # phase classifies a start.
+          - actions_runner_pool_by_name['start/revoke-500']
+          - actions_runner_pool_by_name['start/revoke-429']
+          - actions_runner_pool_by_name['start/revoke-timeout']
+          - actions_runner_pool_by_name['start/pending']
+          - actions_runner_pool_by_name['stop/rm-fail']
+          - actions_runner_pool_by_name['stop/locked']
+          - actions_runner_pool_by_name['retry/failed']
+          - actions_runner_pool_by_name['retry/active']
+          - actions_runner_pool_by_name['condition/marker']
+          - actions_runner_pool_by_name['stop/class-143']
+          - actions_runner_pool_by_name['stop/class-143-stop']
+          - actions_runner_pool_cells | length >= 96
+        fail_msg: "{{ actions_runner_pool_scripts_run.stdout_lines | reject('match', '^PASS ') | list }}"
+
+    # grep exits 1 when nothing matches.
+    - name: Look for the secrets in what the sampler stored and in the service user's journal
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          { cat inspect.json logs.txt cmdline.txt; journalctl _UID={{ actions_runner_pool_uid }} --no-pager -o cat; }
+          | grep -c -F -f {{ actions_runner_pool_test }}/key/patterns
+        executable: /bin/bash
+        chdir: "{{ actions_runner_pool_test }}/log/real"
+      register: actions_runner_pool_real_leaks
+      changed_when: false
+      failed_when: actions_runner_pool_real_leaks.rc != 1
+
+    # A count of none still prints 0 and passes here, so Check the real
+    # runs fails on it with the runs' output.
+    - name: Count the service user's journal entries, the sampled containers and their processes
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          journalctl _UID={{ actions_runner_pool_uid }} --no-pager -o cat | wc -l &&
+          jq -rs 'map(.[]) | map(.Config.Labels["actions-runner-pool.slot"]) | unique | join(" ")' inspect.json &&
+          { grep -c -F /home/runner/run.sh cmdline.txt || [ "$?" -eq 1 ]; }
+        executable: /bin/bash
+        chdir: "{{ actions_runner_pool_test }}/log/real"
+      register: actions_runner_pool_real_counts
+      changed_when: false
+
+    - name: Check the real runs
+      vars:
+        actions_runner_pool_outputs: >-
+          {{ actions_runner_pool_real_files.results | items2dict(key_name='item', value_name='stdout') }}
+        actions_runner_pool_jobs: >-
+          {{ [actions_runner_pool_outputs['slot-1.stop.out'], actions_runner_pool_outputs['slot-2.stop.out']]
+             | map('from_json') | list }}
+        actions_runner_pool_start_logs: >-
+          {{ (actions_runner_pool_outputs['slot-1.err'] ~ '\n' ~ actions_runner_pool_outputs['slot-2.err'])
+             | split('\n') | reject('eq', '') | list }}
+        actions_runner_pool_seen: >-
+          {{ actions_runner_pool_api_log.stdout_lines | map('from_json') | selectattr('scenario', 'eq', 'real')
+             | map(attribute='call') | list }}
+        actions_runner_pool_op_callers: "{{ actions_runner_pool_op_log.stdout_lines
+          | map('split', '\t') | map('first') | list }}"
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_jobs | map(attribute='slot') | list == [1, 2]
+          - actions_runner_pool_jobs | map(attribute='status') | unique == [0]
+          - actions_runner_pool_jobs | map(attribute='container') | unique == ['removed']
+          # Each stop phase still deletes the registration, which the runner
+          # has already removed: the stub's 404 counts as done.
+          - actions_runner_pool_jobs | map(attribute='registration') | unique == ['gone']
+          - actions_runner_pool_jobs | map(attribute='runner_id') | unique == [42]
+          - actions_runner_pool_jobs | map(attribute='outcome') | unique == ['clean']
+          - actions_runner_pool_jobs | map(attribute='pending') | unique == [false]
+          # Each start phase revoked its token before the job, and each stop
+          # phase minted its own, deleted, then revoked.
+          - >-
+            actions_runner_pool_seen
+            == (['token', 'list', 'jit', 'revoke', 'token', 'delete', 'revoke'] * 2)
+            | map('extract', actions_runner_pool_calls) | list
+          # op ran once in each phase, for its token, and nothing else
+          # with the stub op on its PATH called it.
+          - >-
+            actions_runner_pool_op_callers
+            == ['dry-run', 'real-start-1', 'real-stop-1', 'real-start-2', 'real-stop-2']
+          - actions_runner_pool_start_logs | map('from_json') | map(attribute='event') | unique == ['registered']
+          - actions_runner_pool_outputs['slot-1.out'] ~ actions_runner_pool_outputs['slot-2.out'] == ''
+          - actions_runner_pool_outputs['slot-1.stop.err'] ~ actions_runner_pool_outputs['slot-2.stop.err'] == ''
+          # The sampler saw both job containers running, and no secret
+          # anywhere: process command lines, stored configuration, logs,
+          # the journal, or the files under the home and the runtime directory.
+          - actions_runner_pool_real_counts.stdout_lines[1] == '1 2'
+          - actions_runner_pool_real_counts.stdout_lines[2] | int > 0
+          - actions_runner_pool_real_counts.stdout_lines[0] | int > 0
+          - actions_runner_pool_outputs['files.txt'] == ''
+          - actions_runner_pool_real_leaks.stdout | trim == '0'
+        fail_msg: >-
+          {{ actions_runner_pool_real.stdout_lines }} {{ actions_runner_pool_jobs }} {{ actions_runner_pool_seen }}
+          {{ actions_runner_pool_real_counts.stdout_lines }}
+          {{ actions_runner_pool_outputs['files.txt'] }} {{ actions_runner_pool_start_logs }}
+          op: {{ actions_runner_pool_op_log.stdout_lines }}
+
+    - name: Read the slot units' results
+      ansible.builtin.slurp:
+        src: "{{ actions_runner_pool_test }}/log/units/results.json"
+      register: actions_runner_pool_units_results
+
+    # Each case checks its calls, its tokens against the containers'
+    # lifetimes, one stop phase per start, the container's removal, the
+    # pending cleanup's, how the stop phase classified the start, and the
+    # unit's result, as the README states.
+    - name: Check the slot units and the systemd probes
+      vars:
+        actions_runner_pool_cases: "{{ actions_runner_pool_units_results.content | b64decode | from_json }}"
+        actions_runner_pool_by_name: >-
+          {{ actions_runner_pool_cases | items2dict(key_name='name', value_name='passed') }}
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_units_run.rc == 0
+          - actions_runner_pool_cases | rejectattr('passed') | list == []
+          - >-
+            actions_runner_pool_by_name.keys() | sort
+            == ['clean', 'config-78', 'config-github', 'exit-1', 'exit-137', 'exit-143', 'exit-78', 'kill-job',
+                'probe/condition-stops-restarts', 'probe/restart-waits-for-stop-post',
+                'probe/start-waits-for-stop-post', 'probe/stop-post-after-kill-and-timeout', 'start-75',
+                'stop-job', 'stop-rm-fail', 'stop-start']
+          # RestartSteps= and RestartMaxDelaySec= came in systemd 254.
+          - actions_runner_pool_systemd.stdout_lines[0] | regex_search('^systemd ([0-9]+)', '\\1') | first | int >= 254
+        fail_msg: >-
+          {{ actions_runner_pool_systemd.stdout_lines[0] }}
+          {{ actions_runner_pool_units_run.stdout_lines | reject('match', '^PASS ') | list }}
+
+    - name: Look for the key, the tokens and the JIT config on disk
+      vars:
+        actions_runner_pool_key_line: "{{ (actions_runner_pool_key.content | b64decode).splitlines()[1] }}"
+        actions_runner_pool_signature: >-
+          {{ (actions_runner_pool_api_log.stdout_lines[0] | from_json).authorization.split('.')[-1] }}
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rlF
+          - -D
+          - skip
+          - -e
+          - "{{ actions_runner_pool_key_line }}"
+          - -e
+          - ghs_example
+          - -e
+          - example-jit-config
+          - -e
+          - "{{ actions_runner_pool_signature }}"
+          - "{{ actions_runner_pool_home }}"
+          - /run/user/{{ actions_runner_pool_uid }}
+          - /tmp
+          - /var/tmp
+      register: actions_runner_pool_leftovers
+      changed_when: false
+      failed_when: actions_runner_pool_leftovers.rc != 1
+
+    - name: Run the prune service and look at the images, as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      environment: "{{ actions_runner_pool_env }}"
+      block:
+        - name: List the dangling images before pruning
+          ansible.builtin.command:
+            cmd: docker image ls --filter dangling=true --quiet --no-trunc
+            chdir: /
+          register: actions_runner_pool_dangling
+          changed_when: false
+
+        - name: Run the prune service
+          ansible.builtin.systemd_service:
+            name: actions-runner-prune.service
+            scope: user
+            state: started
+
+        - name: Look for the pinned image after pruning
+          ansible.builtin.command:
+            cmd: docker image inspect --format ok {{ actions_runner_pool_busybox }}
+            chdir: /
+          register: actions_runner_pool_pinned
+          changed_when: false
+          failed_when: false
+
+        - name: Look for the dangling image after pruning
+          ansible.builtin.command:
+            cmd: docker image inspect --format ok {{ actions_runner_pool_images.stdout_lines[-1] }}
+            chdir: /
+          register: actions_runner_pool_pruned
+          changed_when: false
+          failed_when: false
+
+        - name: List the slots' networks after pruning
+          ansible.builtin.command:
+            cmd: docker network ls --filter label=actions-runner-pool.slot --format '{{ '{{' }}.Name{{ '}}' }}'
+            chdir: /
+          register: actions_runner_pool_kept_networks
+          changed_when: false
+
+    - name: Check the prune
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_images.stdout_lines[-1] in actions_runner_pool_dangling.stdout_lines
+          - actions_runner_pool_pinned.rc == 0
+          - actions_runner_pool_pruned.rc != 0
+          - actions_runner_pool_kept_networks.stdout_lines | sort == ['pool-slot-1', 'pool-slot-2']
+
+    - name: Read the counters before the probes
+      ansible.builtin.command:
+        cmd: nft list ruleset
+      register: actions_runner_pool_before
+      changed_when: false
+
+    - name: Probe a private address from a job container, with the slot's limits
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      environment: "{{ actions_runner_pool_env }}"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --cpus
+          - "1"
+          - --memory
+          - 128m
+          - --pids-limit
+          - "64"
+          - --security-opt
+          - no-new-privileges
+          - --tmpfs
+          - /home/runner/_work:rw,exec,uid=1001,gid=1001,mode=0700,size=16m
+          - "{{ actions_runner_pool_busybox }}"
+          - sh
+          - -c
+          - >-
+            echo probe | nc -u -w 1 {{ actions_runner_pool_probe_blocked }} 9;
+            cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max;
+            stat -c %u:%a /home/runner/_work
+        chdir: /
+      register: actions_runner_pool_container
+      changed_when: false
+
+    - name: Read the counters after the container probe
+      ansible.builtin.command:
+        cmd: nft list ruleset
+      register: actions_runner_pool_after_container
+      changed_when: false
+
+    - name: Probe a private address as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ actions_runner_pool_probe }}", "{{ actions_runner_pool_probe_blocked }}"]
+        chdir: /
+      register: actions_runner_pool_user_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Probe a public address as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ actions_runner_pool_probe }}", "{{ actions_runner_pool_probe_allowed }}"]
+        chdir: /
+      register: actions_runner_pool_user_public
+      changed_when: false
+      failed_when: false
+
+    - name: Read the counters after the service user's probes
+      ansible.builtin.command:
+        cmd: nft list ruleset
+      register: actions_runner_pool_after_user
+      changed_when: false
+
+    - name: Probe the same private address as root
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ actions_runner_pool_probe }}", "{{ actions_runner_pool_probe_blocked }}"]
+      register: actions_runner_pool_root_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Read the counters after root's probe
+      ansible.builtin.command:
+        cmd: nft list ruleset
+      register: actions_runner_pool_after_root
+      changed_when: false
+
+    - name: Check the egress probes
+      vars:
+        actions_runner_pool_blocked_re: 'ip daddr @blocked_v4 counter packets (\d+)'
+        actions_runner_pool_sink_re: >-
+          ip daddr {{ actions_runner_pool_probe_blocked | regex_escape }} udp dport 9 counter packets (\d+)
+        actions_runner_pool_public_re: >-
+          ip daddr {{ actions_runner_pool_probe_allowed | regex_escape }} udp dport 9 counter packets (\d+)
+        actions_runner_pool_counts: >-
+          {{ [actions_runner_pool_before, actions_runner_pool_after_container, actions_runner_pool_after_user,
+              actions_runner_pool_after_root] | map(attribute='stdout')
+              | map('regex_search', actions_runner_pool_blocked_re, '\1') | map('first') | map('int') | list }}
+        actions_runner_pool_sink_counts: >-
+          {{ [actions_runner_pool_after_user, actions_runner_pool_after_root] | map(attribute='stdout')
+              | map('regex_search', actions_runner_pool_sink_re, '\1') | map('first') | map('int') | list }}
+        actions_runner_pool_public_counts: >-
+          {{ [actions_runner_pool_after_container, actions_runner_pool_after_user] | map(attribute='stdout')
+              | map('regex_search', actions_runner_pool_public_re, '\1') | map('first') | map('int') | list }}
+      ansible.builtin.assert:
+        that:
+          # The container's packet left through pasta as the service user and the table dropped it.
+          - actions_runner_pool_counts[1] > actions_runner_pool_counts[0]
+          - actions_runner_pool_container.stdout_lines == ['100000 100000', '134217728', '64', '1001:700']
+          # The service user's own probe: dropped by the table with EPERM, never reaching the sink.
+          - actions_runner_pool_counts[2] == actions_runner_pool_counts[1] + 1
+          - actions_runner_pool_user_probe.rc != 0
+          - "'Operation not permitted' in actions_runner_pool_user_probe.stderr"
+          # Its public probe passed the table and reached the sink.
+          - actions_runner_pool_public_counts[1] == actions_runner_pool_public_counts[0] + 1
+          # Root's probe to the same address: not matched, so the sink saw it.
+          - actions_runner_pool_counts[3] == actions_runner_pool_counts[2]
+          - actions_runner_pool_sink_counts[1] == actions_runner_pool_sink_counts[0] + 1
+        fail_msg: >-
+          Unexpected counters: egress {{ actions_runner_pool_counts }}, sink {{ actions_runner_pool_sink_counts }},
+          public {{ actions_runner_pool_public_counts }}, container {{ actions_runner_pool_container.stdout_lines }}
+
+    - name: Read the daemon namespace's filter rules and default route
+      ansible.builtin.shell:
+        cmd: >-
+          nsenter --target "$(cat /run/user/{{ actions_runner_pool_uid }}/dockerd-rootless/child_pid)"
+          --net {{ item }}
+      loop: [iptables-save -t filter, ip route show default]
+      register: actions_runner_pool_namespace
+      changed_when: false
+
+    - name: Start a listener on each slot's network, as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      environment: "{{ actions_runner_pool_env }}"
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          for slot in 1 2; do
+            docker rm --force runner-pool-listener-$slot >/dev/null 2>&1 || true
+            docker run --detach --name runner-pool-listener-$slot --network pool-slot-$slot \
+              {{ actions_runner_pool_busybox }} \
+              sh -c "echo slot-$slot >/tmp/index.html && exec httpd -f -p 8080 -h /tmp" >/dev/null
+          done
+          ip_format='{{ '{{' }}range .NetworkSettings.Networks{{ '}}' }}'
+          ip_format+='{{ '{{' }}.IPAddress{{ '}}' }}{{ '{{' }}end{{ '}}' }}'
+          for slot in 1 2; do
+            docker inspect --format "$ip_format" runner-pool-listener-$slot
+          done
+        executable: /bin/bash
+        chdir: /
+      register: actions_runner_pool_listeners
+      changed_when: true
+
+    - name: Probe between the slots' networks and to the host's loopback
+      vars:
+        actions_runner_pool_gateway: >-
+          {{ actions_runner_pool_namespace.results[1].stdout.split()[2] }}
+        actions_runner_pool_listener_1: "{{ actions_runner_pool_listeners.stdout_lines[0] }}:8080"
+        actions_runner_pool_listener_2: "{{ actions_runner_pool_listeners.stdout_lines[1] }}:8080"
+      block:
+        - name: Start a listener on the host's loopback
+          ansible.builtin.command:
+            cmd: >-
+              systemd-run --unit=runner-pool-loopback --collect
+              python3 -m http.server --bind 127.0.0.1 --directory {{ actions_runner_pool_test }}/stubs 18090
+          changed_when: true
+
+        - name: Wait for the loopback listener
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: 18090
+            timeout: 30
+
+        # The daemon's own namespace reaches both, so a failed probe below is the isolation.
+        - name: Fetch each slot's listener from the daemon's namespace
+          ansible.builtin.shell:
+            cmd: >-
+              nsenter --target "$(cat /run/user/{{ actions_runner_pool_uid }}/dockerd-rootless/child_pid)" --net
+              python3 -c 'import sys, urllib.request;
+              print(urllib.request.urlopen(sys.argv[1], timeout=5).read().decode().strip())'
+              http://{{ item }}/
+          loop: ["{{ actions_runner_pool_listener_1 }}", "{{ actions_runner_pool_listener_2 }}"]
+          register: actions_runner_pool_listener_control
+          changed_when: false
+
+        - name: Read the counters before the network probes
+          ansible.builtin.command:
+            cmd: nft list ruleset
+          register: actions_runner_pool_before_network
+          changed_when: false
+
+        - name: Probe from the slots' networks, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --network
+              - pool-slot-{{ item.network }}
+              - "{{ actions_runner_pool_busybox }}"
+              - wget
+              - -q
+              - -T
+              - "3"
+              - -O
+              - "-"
+              - http://{{ item.target }}/
+            chdir: /
+          loop:
+            - {network: 2, target: "{{ actions_runner_pool_listener_1 }}"}
+            - {network: 1, target: "{{ actions_runner_pool_listener_2 }}"}
+            # The same network, with inter-container traffic off.
+            - {network: 1, target: "{{ actions_runner_pool_listener_1 }}"}
+            # The host's 127.0.0.1, through pasta's gateway address.
+            - {network: 1, target: "{{ actions_runner_pool_gateway }}:18090"}
+          register: actions_runner_pool_network_probes
+          changed_when: false
+          failed_when: false
+
+        - name: Send a probe to the public test address from slot 1's network, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --network
+              - pool-slot-1
+              - "{{ actions_runner_pool_busybox }}"
+              - sh
+              - -c
+              - echo probe | nc -u -w 1 {{ actions_runner_pool_probe_allowed }} 9
+            chdir: /
+          changed_when: false
+
+        - name: Read the counters after the network probes
+          ansible.builtin.command:
+            cmd: nft list ruleset
+          register: actions_runner_pool_after_network
+          changed_when: false
+      always:
+        - name: Stop the loopback listener
+          ansible.builtin.systemd_service:
+            name: runner-pool-loopback.service
+            state: stopped
+          failed_when: false
+
+        - name: Remove the slot listeners, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            cmd: docker rm --force runner-pool-listener-1 runner-pool-listener-2
+            chdir: /
+          changed_when: true
+          failed_when: false
+
+    - name: Check the slots' isolation and the host loopback
+      vars:
+        actions_runner_pool_rules: "{{ actions_runner_pool_namespace.results[0].stdout_lines }}"
+        actions_runner_pool_bridges: >-
+          {{ actions_runner_pool_real_state.results[1].stdout | from_json | map(attribute='Id')
+             | map('truncate', 12, true, '', 0) | map('regex_replace', '^', 'br-') | list }}
+        actions_runner_pool_local_counts: >-
+          {{ [actions_runner_pool_before_network, actions_runner_pool_after_network] | map(attribute='stdout')
+             | map('regex_search', 'fib daddr type local counter packets [0-9]+') | map('split') | map('last')
+             | map('int') | list }}
+        actions_runner_pool_nat_counts: >-
+          {{ [actions_runner_pool_before_network, actions_runner_pool_after_network] | map(attribute='stdout')
+             | map('regex_search', 'ip daddr ' ~ (actions_runner_pool_probe_allowed | regex_escape)
+                   ~ ' udp dport 9 counter packets [0-9]+') | map('split') | map('last') | map('int') | list }}
+      ansible.builtin.assert:
+        that:
+          # The daemon in the namespace drops traffic into each slot's bridge
+          # from any other interface, and between its own containers.
+          - actions_runner_pool_bridges | length == 2
+          - >-
+            '-A DOCKER ! -i ' ~ actions_runner_pool_bridges[0] ~ ' -o ' ~ actions_runner_pool_bridges[0] ~ ' -j DROP'
+            in actions_runner_pool_rules
+          - >-
+            '-A DOCKER ! -i ' ~ actions_runner_pool_bridges[1] ~ ' -o ' ~ actions_runner_pool_bridges[1] ~ ' -j DROP'
+            in actions_runner_pool_rules
+          - >-
+            '-A DOCKER-FORWARD -i ' ~ actions_runner_pool_bridges[0]
+            ~ ' -o ' ~ actions_runner_pool_bridges[0] ~ ' -j DROP' in actions_runner_pool_rules
+          - >-
+            '-A DOCKER-FORWARD -i ' ~ actions_runner_pool_bridges[1]
+            ~ ' -o ' ~ actions_runner_pool_bridges[1] ~ ' -j DROP' in actions_runner_pool_rules
+          - actions_runner_pool_listener_control.results | map(attribute='stdout') | list == ['slot-1', 'slot-2']
+          # A slot's own way out still works: its probe passed the egress table and reached the sink.
+          - actions_runner_pool_nat_counts[1] == actions_runner_pool_nat_counts[0] + 1
+          # pasta opened nothing to a host-local address for the gateway probe.
+          - actions_runner_pool_local_counts[1] == actions_runner_pool_local_counts[0]
+          # Every probe from a slot's network timed out.
+          - actions_runner_pool_network_probes.results | map(attribute='rc') | select('eq', 0) | list == []
+          - >-
+            actions_runner_pool_network_probes.results | map(attribute='stderr')
+            | reject('search', 'download timed out') | list == []
+        fail_msg: >-
+          {{ actions_runner_pool_bridges }} {{ actions_runner_pool_rules }}
+          {{ actions_runner_pool_listener_control.results | map(attribute='stdout') | list }}
+          {{ actions_runner_pool_network_probes.results | map(attribute='stderr') | list }}
+          local {{ actions_runner_pool_local_counts }}, sink {{ actions_runner_pool_nat_counts }}
+
+    # The gateway probe above shows pasta maps nothing to the host's
+    # loopback. These probe the egress table itself, with a listener on each
+    # loopback address that a test-only user owns: that user reaches both,
+    # and the service user's connections end in the fib-local drop rule.
+    - name: Probe the host's loopback through the egress table
+      vars:
+        actions_runner_pool_probe_user: runner-pool-probe
+        actions_runner_pool_loopback_port: 18091
+        actions_runner_pool_loopback_hosts: [127.0.0.1, "::1"]
+        actions_runner_pool_connect: python3 {{ actions_runner_pool_test }}/connect.py
+        # The packets the service user chain's fib-local drop rules have counted.
+        actions_runner_pool_fib_count: >-
+          set -o pipefail &&
+          nft -j list table inet actions_runner_egress
+          | jq -e '[.nftables[] | .rule // empty | select(.chain == "service_user")
+          | select(any(.expr[]; .match.left.fib != null and .match.right == "local"))
+          | select(any(.expr[]; has("drop"))) | .expr[] | .counter // empty | .packets]
+          | if length > 0 then add else error("no fib-local drop rule") end'
+        actions_runner_pool_gateway: >-
+          {{ actions_runner_pool_namespace.results[1].stdout.split()[2] }}
+      block:
+        - name: Create the listeners' test-only user
+          ansible.builtin.user:
+            name: "{{ actions_runner_pool_probe_user }}"
+            system: true
+            create_home: false
+            shell: /usr/sbin/nologin
+
+        - name: Install the connection probe
+          ansible.builtin.copy:
+            dest: "{{ actions_runner_pool_test }}/connect.py"
+            mode: "0644"
+            content: |
+              import json
+              import socket
+              import sys
+
+              host, port = sys.argv[1], int(sys.argv[2])
+              try:
+                  socket.create_connection((host, port), timeout=3).close()
+              except OSError as error:
+                  print(json.dumps({"connected": False, "error": type(error).__name__}))
+                  sys.exit(1)
+              print(json.dumps({"connected": True}))
+
+        - name: Start a listener on each loopback address, as the test-only user
+          ansible.builtin.command:
+            cmd: >-
+              systemd-run --unit=runner-pool-loopback-{{ index }} --collect --uid={{ actions_runner_pool_probe_user }}
+              python3 -m http.server --bind {{ item }} --directory {{ actions_runner_pool_test }}/stubs
+              {{ actions_runner_pool_loopback_port }}
+          loop: "{{ actions_runner_pool_loopback_hosts }}"
+          loop_control:
+            index_var: index
+          changed_when: true
+
+        - name: Wait for the loopback listeners
+          ansible.builtin.wait_for:
+            host: "{{ item }}"
+            port: "{{ actions_runner_pool_loopback_port }}"
+            timeout: 30
+          loop: "{{ actions_runner_pool_loopback_hosts }}"
+
+        - name: Connect to each listener as the test-only user
+          ansible.builtin.command:
+            cmd: >-
+              runuser -u {{ actions_runner_pool_probe_user }} --
+              {{ actions_runner_pool_connect }} {{ item }} {{ actions_runner_pool_loopback_port }}
+          loop: "{{ actions_runner_pool_loopback_hosts }}"
+          register: actions_runner_pool_loopback_control
+          changed_when: false
+          failed_when: false
+
+        - name: Read the fib-local counter before the service user's probes
+          ansible.builtin.shell:
+            cmd: "{{ actions_runner_pool_fib_count }}"
+            executable: /bin/bash
+          register: actions_runner_pool_fib_before
+          changed_when: false
+
+        - name: Connect to 127.0.0.1 as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          ansible.builtin.command:
+            cmd: "{{ actions_runner_pool_connect }} 127.0.0.1 {{ actions_runner_pool_loopback_port }}"
+            chdir: /
+          register: actions_runner_pool_loopback_v4
+          changed_when: false
+          failed_when: false
+
+        - name: Read the fib-local counter after the IPv4 probe
+          ansible.builtin.shell:
+            cmd: "{{ actions_runner_pool_fib_count }}"
+            executable: /bin/bash
+          register: actions_runner_pool_fib_v4
+          changed_when: false
+
+        - name: Connect to ::1 as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          ansible.builtin.command:
+            cmd: "{{ actions_runner_pool_connect }} ::1 {{ actions_runner_pool_loopback_port }}"
+            chdir: /
+          register: actions_runner_pool_loopback_v6
+          changed_when: false
+          failed_when: false
+
+        - name: Read the fib-local counter after the IPv6 probe
+          ansible.builtin.shell:
+            cmd: "{{ actions_runner_pool_fib_count }}"
+            executable: /bin/bash
+          register: actions_runner_pool_fib_v6
+          changed_when: false
+
+        # A job's 127.0.0.1 and ::1 are its own loopback, so nothing leaves
+        # the container. The host's 127.0.0.1 is reachable only through
+        # pasta's gateway, which maps nothing to it, and a slot's network has
+        # no IPv6 route, so the host's ::1 has no address a job could use.
+        - name: Probe the host's loopback from slot 1's network, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --rm
+              - --network
+              - pool-slot-1
+              - "{{ actions_runner_pool_busybox }}"
+              - wget
+              - -q
+              - -T
+              - "3"
+              - -O
+              - "-"
+              - http://{{ item }}:{{ actions_runner_pool_loopback_port }}/
+            chdir: /
+          loop:
+            - 127.0.0.1
+            - "[::1]"
+            - "{{ actions_runner_pool_gateway }}"
+            - "[2001:db8::1]"
+          register: actions_runner_pool_loopback_container
+          changed_when: false
+          failed_when: false
+
+        - name: Read the fib-local counter after the container probes
+          ansible.builtin.shell:
+            cmd: "{{ actions_runner_pool_fib_count }}"
+            executable: /bin/bash
+          register: actions_runner_pool_fib_container
+          changed_when: false
+      always:
+        - name: Stop the loopback listeners
+          ansible.builtin.systemd_service:
+            name: runner-pool-loopback-{{ item }}.service
+            state: stopped
+          loop: [0, 1]
+          failed_when: false
+
+        - name: Remove the listeners' test-only user
+          ansible.builtin.user:
+            name: "{{ actions_runner_pool_probe_user }}"
+            state: absent
+
+    - name: Check the host loopback probes
+      vars:
+        actions_runner_pool_fib_counts: >-
+          {{ [actions_runner_pool_fib_before, actions_runner_pool_fib_v4, actions_runner_pool_fib_v6,
+              actions_runner_pool_fib_container] | map(attribute='stdout') | map('int') | list }}
+        actions_runner_pool_container_errors: >-
+          {{ actions_runner_pool_loopback_container.results | map(attribute='stderr') | list }}
+      ansible.builtin.assert:
+        that:
+          # The test-only user reaches both listeners.
+          - actions_runner_pool_loopback_control.results | map(attribute='rc') | list == [0, 0]
+          - >-
+            actions_runner_pool_loopback_control.results | map(attribute='stdout') | map('from_json')
+            | map(attribute='connected') | list == [true, true]
+          # The service user's connections time out, because the table drops
+          # each SYN, and the fib-local counter rises for each family.
+          - actions_runner_pool_loopback_v4.rc == 1
+          - (actions_runner_pool_loopback_v4.stdout | from_json).error == 'TimeoutError'
+          - actions_runner_pool_loopback_v6.rc == 1
+          - (actions_runner_pool_loopback_v6.stdout | from_json).error == 'TimeoutError'
+          - actions_runner_pool_fib_counts[1] > actions_runner_pool_fib_counts[0]
+          - actions_runner_pool_fib_counts[2] > actions_runner_pool_fib_counts[1]
+          # From a job: its own loopback refuses, the gateway times out, IPv6
+          # has no route, and none of it reaches the host's egress table.
+          - actions_runner_pool_loopback_container.results | map(attribute='rc') | select('eq', 0) | list == []
+          - "'Connection refused' in actions_runner_pool_container_errors[0]"
+          - "'Connection refused' in actions_runner_pool_container_errors[1]"
+          - "'download timed out' in actions_runner_pool_container_errors[2]"
+          - "'Network is unreachable' in actions_runner_pool_container_errors[3]"
+          - actions_runner_pool_fib_counts[3] == actions_runner_pool_fib_counts[2]
+        fail_msg: >-
+          control {{ actions_runner_pool_loopback_control.results | map(attribute='stdout') | list }},
+          service user {{ actions_runner_pool_loopback_v4.stdout }} {{ actions_runner_pool_loopback_v6.stdout }},
+          fib-local {{ actions_runner_pool_fib_counts }}, container {{ actions_runner_pool_container_errors }}
+
+    - name: Check that reloading removed the opening
+      ansible.builtin.command:
+        cmd: nft list table inet actions_runner_egress
+      register: actions_runner_pool_restored
+      changed_when: false
+      failed_when: >-
+        actions_runner_pool_restored.stdout is search('(?m)^[ \t]*meta skuid ' ~ actions_runner_pool_uid ~ ' accept')
+
+    # docker_rootless owns the data file system, and its scenario checks it
+    # in full. Here it's enough that the daemon the pool runs on keeps its
+    # data root on that mount.
+    - name: Read the file system at the daemon's data root
+      ansible.builtin.command:
+        argv: [findmnt, --noheadings, --output=FSTYPE, --mountpoint, "{{ actions_runner_pool_docker_root }}"]
+      register: actions_runner_pool_docker_mount
+      changed_when: false
+
+    - name: Read where the daemon keeps its data, as the service user
+      become: true
+      become_user: "{{ actions_runner_pool_user }}"
+      environment: "{{ actions_runner_pool_env }}"
+      ansible.builtin.command:
+        cmd: docker info --format {{ '{{' }}.DockerRootDir{{ '}}' }}
+        chdir: /
+      register: actions_runner_pool_docker_info_root
+      changed_when: false
+
+    - name: Check that the daemon's data root is the data file system
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_docker_mount.stdout == 'ext4'
+          - actions_runner_pool_docker_info_root.stdout == actions_runner_pool_docker_root
+        fail_msg: "{{ actions_runner_pool_docker_mount.stdout }} {{ actions_runner_pool_docker_info_root.stdout }}"
+
+    - name: List files under the home that root owns
+      ansible.builtin.command:
+        cmd: find {{ actions_runner_pool_home }} ( -uid 0 -o -gid 0 ) -print
+      register: actions_runner_pool_root_files
+      changed_when: false
+
+    - name: List the owners of files under the home
+      ansible.builtin.shell:
+        cmd: set -o pipefail && find {{ actions_runner_pool_home }} -printf '%U\n%G\n' | sort -un
+        executable: /bin/bash
+      register: actions_runner_pool_owners
+      changed_when: false
+
+    - name: Check that the service user owns everything under its home
+      vars:
+        actions_runner_pool_foreign_owners: >-
+          {{ actions_runner_pool_owners.stdout_lines | map('int')
+             | reject('in', [actions_runner_pool_uid | int,
+                             ansible_facts.getent_passwd[actions_runner_pool_user][2] | int])
+             | reject('in', range(actions_runner_pool_subid_start,
+                                  actions_runner_pool_subid_start + actions_runner_pool_subid_count))
+             | list }}
+      ansible.builtin.assert:
+        that:
+          - actions_runner_pool_root_files.stdout_lines | length == 0
+          - actions_runner_pool_foreign_owners | length == 0
+        fail_msg: >-
+          Root files {{ actions_runner_pool_root_files.stdout_lines }},
+          owners {{ actions_runner_pool_owners.stdout_lines }}

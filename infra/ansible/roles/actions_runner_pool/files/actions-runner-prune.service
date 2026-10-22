@@ -1,0 +1,14 @@
+[Unit]
+Description=Prune unused Docker data for the runner pool
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=DOCKER_HOST=unix://%t/docker.sock
+# Without --all, prune keeps every image a name or digest refers to, so
+# the runner image pulled by its pinned digest stays. Stopped containers,
+# unused networks and anonymous volumes, dangling images and the build
+# cache go. The slots' networks carry the slot label and stay, so a prune
+# can't remove one between a supervisor's check and its docker run.
+ExecStart=/usr/bin/docker system prune --force --volumes --filter label!=actions-runner-pool.slot

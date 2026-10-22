@@ -1,0 +1,22 @@
+---
+# The destinations the egress table refuses to the service user: the
+# private and shared address space, link-local, and the IPv6 unique local
+# and link-local prefixes. The unique local prefix covers the tailnet's.
+# The leak gate exempts this file by path (.leak-allow), because these
+# ranges are the policy rather than anyone's address.
+actions_runner_pool_egress_blocked_v4:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - 100.64.0.0/10
+  - 169.254.0.0/16
+actions_runner_pool_egress_blocked_v6:
+  - fc00::/7
+  - fe80::/10
+# The slot's stop budget, in seconds. The stop phase, which removes the
+# job container, deletes the registration and revokes its token, ends
+# within it, and so does the start phase once past its first stop check.
+# The slot unit's stop timeout and the cleanup retry service's start
+# timeout are this plus 15, and both phases refuse a value under 115, the
+# start phase's bound.
+actions_runner_pool_cleanup_seconds: 120

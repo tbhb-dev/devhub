@@ -1,0 +1,247 @@
+---
+# Root installs the packages, the service user, its subordinate ID ranges,
+# the linger flag and the data file system. Everything under the user's
+# home, the daemon's user unit included, is written as that user.
+
+- name: Check the subordinate ID range
+  ansible.builtin.assert:
+    that:
+      - docker_rootless_subid_start >= 100000
+      - docker_rootless_subid_count >= 65536
+    fail_msg: docker_rootless_subid_start must be at least 100000 and docker_rootless_subid_count at least 65536
+    quiet: true
+
+- name: Check the data file system's settings
+  ansible.builtin.assert:
+    that:
+      - docker_rootless_data_image is match('^/var/lib/[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - docker_rootless_data_size | human_to_bytes > 0
+    fail_msg: >-
+      docker_rootless_data_image must be a file directly under /var/lib, and docker_rootless_data_size
+      a size, or empty for no data file system
+    quiet: true
+  when: docker_rootless_data_size | length > 0
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Pinned by checksum. The key's fingerprint is
+# 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88.
+- name: Install Docker's apt signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+    owner: root
+    group: root
+    mode: "0644"
+  register: docker_rootless_key
+
+- name: Add Docker's apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: stable
+      Signed-By: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: docker_rootless_source
+
+# A check run hasn't written the repository, so it skips the packages too.
+- name: Refresh the package index for the new repository
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - docker_rootless_key is changed or docker_rootless_source is changed
+    - not ansible_check_mode
+
+# acl lets Ansible hand its temporary files to the service user, and
+# e2fsprogs makes the data file system. The packages must not start the
+# system daemon on install.
+- name: Install Docker and the rootless tools
+  ansible.builtin.apt:
+    name:
+      - acl
+      - containerd.io
+      - dbus-user-session
+      - docker-ce
+      - docker-ce-cli
+      - docker-ce-rootless-extras
+      - e2fsprogs
+      - iproute2
+      - iptables
+      - passt
+      - uidmap
+    state: present
+    install_recommends: false
+    policy_rc_d: 101
+  register: docker_rootless_packages
+  when: not (ansible_check_mode and (docker_rootless_key is changed or docker_rootless_source is changed))
+
+- name: Note whether a check run would install the packages first
+  ansible.builtin.set_fact:
+    docker_rootless_pending: >-
+      {{ ansible_check_mode and (docker_rootless_key is changed or docker_rootless_source is changed
+         or docker_rootless_packages is changed) }}
+
+# containerd.service is the system daemon's runtime and nothing else uses it.
+- name: Stop and mask the system Docker daemon
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: [docker.socket, docker.service, containerd.service]
+  when: not docker_rootless_pending
+
+# Ubuntu restricts unprivileged user namespaces through AppArmor, and the
+# apparmor package's rootlesskit profile is what lets the daemon create one.
+- name: Read the user namespace restriction
+  ansible.builtin.slurp:
+    src: /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+  register: docker_rootless_userns_restriction
+  failed_when: false
+
+- name: Look for the rootlesskit AppArmor profile
+  ansible.builtin.stat:
+    path: /etc/apparmor.d/rootlesskit
+  register: docker_rootless_apparmor_profile
+
+- name: Check that rootlesskit may create user namespaces
+  ansible.builtin.assert:
+    that: >-
+      (docker_rootless_userns_restriction.content | default('MAo=') | b64decode | trim) != '1'
+      or docker_rootless_apparmor_profile.stat.exists
+    fail_msg: AppArmor restricts unprivileged user namespaces and /etc/apparmor.d/rootlesskit is missing
+    quiet: true
+
+- name: Create the service user
+  ansible.builtin.user:
+    name: "{{ docker_rootless_user }}"
+    system: true
+    home: "{{ docker_rootless_home }}"
+    create_home: true
+    shell: /usr/sbin/nologin
+    password_lock: true
+  register: docker_rootless_account
+
+- name: Stop a check run at an account it would create
+  ansible.builtin.meta: end_role
+  when: ansible_check_mode and docker_rootless_account is changed
+
+- name: Record the service user's IDs
+  ansible.builtin.set_fact:
+    docker_rootless_uid: "{{ docker_rootless_account.uid }}"
+    docker_rootless_gid: "{{ docker_rootless_account.group }}"
+
+# useradd leaves an existing directory as it is, such as a mount point.
+- name: Give the service user its home
+  ansible.builtin.file:
+    path: "{{ docker_rootless_home }}"
+    state: directory
+    owner: "{{ docker_rootless_user }}"
+    group: "{{ docker_rootless_user }}"
+    mode: "0700"
+
+- name: Read the subordinate ID files
+  ansible.builtin.slurp:
+    src: /etc/{{ item }}
+  loop: [subuid, subgid]
+  register: docker_rootless_subids
+  failed_when: false
+
+- name: Check that no other entry overlaps the subordinate ID range
+  vars:
+    docker_rootless_subid_end: "{{ docker_rootless_subid_start + docker_rootless_subid_count }}"
+    docker_rootless_subid_conflicts: >-
+      {%- set conflicts = [] -%}
+      {%- for file in docker_rootless_subids.results -%}
+      {%- for line in (file.content | default('') | b64decode).splitlines() -%}
+      {%- set entry = line.split(':') -%}
+      {%- if entry | length == 3 and entry[0] not in [docker_rootless_user, docker_rootless_uid | string]
+            and entry[1] | int < docker_rootless_subid_end | int
+            and docker_rootless_subid_start < entry[1] | int + entry[2] | int -%}
+      {%- set _ = conflicts.append(file.item ~ ' entry for ' ~ entry[0]) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ conflicts }}
+  ansible.builtin.assert:
+    that: docker_rootless_subid_conflicts | length == 0
+    fail_msg: "The subordinate ID range overlaps: {{ docker_rootless_subid_conflicts | join(', ') }}"
+    quiet: true
+
+- name: Assign the subordinate ID ranges
+  ansible.builtin.lineinfile:
+    path: /etc/{{ item }}
+    regexp: "^{{ docker_rootless_user }}:"
+    line: "{{ docker_rootless_user }}:{{ docker_rootless_subid_start }}:{{ docker_rootless_subid_count }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [subuid, subgid]
+  notify: Restart the rootless Docker daemon
+
+- name: Enable lingering for the service user
+  ansible.builtin.command:
+    cmd: loginctl enable-linger {{ docker_rootless_user }}
+    creates: /var/lib/systemd/linger/{{ docker_rootless_user }}
+
+# Before the role installs or starts the daemon, so on a fresh host the
+# daemon never writes to the directory the file system goes on.
+- name: Refuse to hide old data under the data file system
+  ansible.builtin.include_tasks: old_data.yml
+  when: docker_rootless_data_size | length > 0
+
+- name: Put the Docker data root on its own file system
+  ansible.builtin.include_tasks: data.yml
+  when: docker_rootless_data_size | length > 0
+
+- name: Start the service user's systemd instance
+  ansible.builtin.systemd_service:
+    name: user@{{ docker_rootless_uid }}.service
+    state: started
+
+- name: Install the rootless daemon as the service user
+  become: true
+  become_user: "{{ docker_rootless_user }}"
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ docker_rootless_uid }}
+  block:
+    - name: Create the user unit directories
+      ansible.builtin.file:
+        path: "{{ docker_rootless_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [.config, .config/systemd, .config/systemd/user]
+
+    - name: Install the rootless daemon unit
+      ansible.builtin.copy:
+        src: docker.service
+        dest: "{{ docker_rootless_home }}/.config/systemd/user/docker.service"
+        mode: "0644"
+      register: docker_rootless_unit
+      notify: Restart the rootless Docker daemon
+
+    - name: Enable and start the rootless daemon
+      ansible.builtin.systemd_service:
+        name: docker.service
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+      when: not (ansible_check_mode and docker_rootless_unit is changed)
+
+# The runner pool depends on a daemon that already carries this run's unit.
+- name: Apply the rootless daemon handlers
+  ansible.builtin.meta: flush_handlers

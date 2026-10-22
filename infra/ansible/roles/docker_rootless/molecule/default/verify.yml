@@ -1,0 +1,424 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    docker_rootless_user: ghrunner
+    docker_rootless_home: /var/lib/ghrunner
+    docker_rootless_subid_start: 524288
+    docker_rootless_subid_count: 65536
+    docker_rootless_data_image: /var/lib/docker-rootless-data.img
+    docker_rootless_data_root: /var/lib/ghrunner/.local/share/docker
+    docker_rootless_mount_unit: var-lib-ghrunner-.local-share-docker.mount
+    # A second service user whose data root already holds data when the role first runs for it.
+    docker_rootless_old_user: old-data
+    docker_rootless_old_home: /var/lib/old-data
+    docker_rootless_old_subid_start: 589824
+    docker_rootless_old_image: /var/lib/docker-rootless-old-data.img
+  tasks:
+    - name: Read the service user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ docker_rootless_user }}"
+
+    # data.yml, run below for its refusals, reads both.
+    - name: Record the service user's IDs
+      ansible.builtin.set_fact:
+        docker_rootless_uid: "{{ ansible_facts.getent_passwd[docker_rootless_user][1] }}"
+        docker_rootless_gid: "{{ ansible_facts.getent_passwd[docker_rootless_user][2] }}"
+
+    - name: Look for a dockerd owned by root
+      ansible.builtin.command:
+        cmd: pgrep -u 0 -x dockerd
+      register: docker_rootless_root_daemon
+      changed_when: false
+      failed_when: docker_rootless_root_daemon.rc not in [0, 1]
+
+    - name: Read the system daemon units' boot state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-enabled {{ item }}
+      loop: [docker.socket, docker.service, containerd.service]
+      register: docker_rootless_system_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the system daemon units' state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active {{ item }}
+      loop: [docker.socket, docker.service, containerd.service]
+      register: docker_rootless_system_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read the service user's daemon as that user
+      become: true
+      become_user: "{{ docker_rootless_user }}"
+      environment:
+        XDG_RUNTIME_DIR: /run/user/{{ docker_rootless_uid }}
+        DOCKER_HOST: unix:///run/user/{{ docker_rootless_uid }}/docker.sock
+      block:
+        - name: Read the user daemon's boot state
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl --user is-enabled docker.service
+          register: docker_rootless_user_enabled
+          changed_when: false
+
+        - name: Read the user daemon's state
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl --user is-active docker.service
+          register: docker_rootless_user_active
+          changed_when: false
+
+        - name: Ask the user daemon for its settings
+          ansible.builtin.command:
+            cmd: docker info --format json
+          register: docker_rootless_info
+          changed_when: false
+
+        - name: Read the user daemon's environment
+          ansible.builtin.command: # noqa: command-instead-of-module
+            cmd: systemctl --user show docker.service --property=Environment --value
+          register: docker_rootless_env
+          changed_when: false
+
+    - name: Look for the user daemon's pasta process
+      ansible.builtin.command:
+        cmd: pgrep -u {{ docker_rootless_user }} -f '^pasta(\.avx2)? '
+      register: docker_rootless_pasta
+      changed_when: false
+      failed_when: false
+
+    - name: Read rootlesskit's and pasta's command lines
+      ansible.builtin.command:
+        cmd: pgrep -a -u {{ docker_rootless_user }} -f '^(rootlesskit|pasta(\.avx2)?) '
+      register: docker_rootless_network_cmdlines
+      changed_when: false
+
+    - name: Read the linger flag
+      ansible.builtin.command:
+        cmd: loginctl show-user {{ docker_rootless_user }} --property=Linger --value
+      register: docker_rootless_linger
+      changed_when: false
+
+    - name: Read the password state
+      ansible.builtin.command:
+        cmd: passwd -S {{ docker_rootless_user }}
+      register: docker_rootless_passwd
+      changed_when: false
+
+    - name: Read the subordinate ID entries
+      ansible.builtin.command:
+        cmd: "grep -h ^{{ docker_rootless_user }}: /etc/subuid /etc/subgid"
+      register: docker_rootless_subid_lines
+      changed_when: false
+
+    # Image layers can belong to the user's subordinate IDs, which are the
+    # user's too. Root's UID or GID would mean something wrote as root.
+    - name: List files under the home that root owns
+      ansible.builtin.command:
+        cmd: find {{ docker_rootless_home }} ( -uid 0 -o -gid 0 ) -print
+      register: docker_rootless_root_files
+      changed_when: false
+
+    - name: List the owners of files under the home
+      ansible.builtin.shell:
+        cmd: set -o pipefail && find {{ docker_rootless_home }} -printf '%U\n%G\n' | sort -un
+        executable: /bin/bash
+      register: docker_rootless_owners
+      changed_when: false
+
+    - name: Check the rootless daemon and its user
+      vars:
+        docker_rootless_info_json: "{{ docker_rootless_info.stdout | from_json }}"
+        docker_rootless_entry: "{{ ansible_facts.getent_passwd[docker_rootless_user] }}"
+        docker_rootless_foreign_owners: >-
+          {{ docker_rootless_owners.stdout_lines | map('int')
+             | reject('in', [docker_rootless_uid | int,
+                             ansible_facts.getent_passwd[docker_rootless_user][2] | int])
+             | reject('in', range(docker_rootless_subid_start,
+                                  docker_rootless_subid_start + docker_rootless_subid_count))
+             | list }}
+      ansible.builtin.assert:
+        that:
+          - docker_rootless_root_daemon.rc == 1
+          - docker_rootless_system_enabled.results | map(attribute='stdout') | list == ['masked', 'masked', 'masked']
+          - >-
+            docker_rootless_system_active.results | map(attribute='stdout') | list
+            == ['inactive', 'inactive', 'inactive']
+          - docker_rootless_user_enabled.stdout == 'enabled'
+          - docker_rootless_user_active.stdout == 'active'
+          - "'name=rootless' in docker_rootless_info_json.SecurityOptions"
+          - docker_rootless_info_json.CgroupVersion == '2'
+          - docker_rootless_info_json.CpuCfsQuota
+          - docker_rootless_info_json.MemoryLimit
+          - docker_rootless_info_json.PidsLimit
+          - docker_rootless_info_json.DockerRootDir == docker_rootless_home ~ '/.local/share/docker'
+          - docker_rootless_pasta.rc == 0
+          # Host loopback is off by name, and pasta maps no gateway to the host's 127.0.0.1.
+          - "'DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true' in docker_rootless_env.stdout.split()"
+          - docker_rootless_network_cmdlines.stdout is search('(?m)^[0-9]+ rootlesskit .*--disable-host-loopback')
+          - docker_rootless_network_cmdlines.stdout is search('(?m)^[0-9]+ pasta(\.avx2)? .*--no-map-gw')
+          - docker_rootless_linger.stdout == 'yes'
+          - docker_rootless_passwd.stdout.split()[1] == 'L'
+          - docker_rootless_entry[4] == docker_rootless_home
+          - docker_rootless_entry[5] == '/usr/sbin/nologin'
+          - >-
+            docker_rootless_subid_lines.stdout_lines
+            == [docker_rootless_user ~ ':' ~ docker_rootless_subid_start ~ ':' ~ docker_rootless_subid_count] * 2
+          - docker_rootless_root_files.stdout_lines | length == 0
+          - docker_rootless_foreign_owners | length == 0
+        fail_msg: >-
+          Unexpected rootless state: root files {{ docker_rootless_root_files.stdout_lines }},
+          owners {{ docker_rootless_owners.stdout_lines }}
+
+    - name: Read the data file system's mount
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --json
+          - --bytes
+          - --output=SOURCE,FSTYPE,SIZE
+          - --mountpoint
+          - "{{ docker_rootless_data_root }}"
+      register: docker_rootless_data_mount
+      changed_when: false
+
+    - name: Read the loop device's backing file
+      ansible.builtin.command:
+        argv:
+          - losetup
+          - --noheadings
+          - --output=BACK-FILE
+          - "{{ (docker_rootless_data_mount.stdout | from_json).filesystems[0].source }}"
+      register: docker_rootless_data_loop
+      changed_when: false
+
+    - name: Read the data image and the file system's root and lost+found
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      loop:
+        - "{{ docker_rootless_data_image }}"
+        - "{{ docker_rootless_data_root }}"
+        - "{{ docker_rootless_data_root }}/lost+found"
+      register: docker_rootless_data_files
+
+    - name: Read the mount unit and what the service user's systemd instance waits for
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl show {{ item }}
+      loop:
+        - "{{ docker_rootless_mount_unit }} --property=ActiveState,UnitFileState,What,Where,Type,Options"
+        - user@{{ docker_rootless_uid }}.service --property=Requires,After
+      register: docker_rootless_data_units
+      changed_when: false
+
+    - name: Find the file system under the daemon's images
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output=TARGET
+          - --target
+          - "{{ (docker_rootless_info.stdout | from_json).DockerRootDir }}/image"
+      register: docker_rootless_data_image_mount
+      changed_when: false
+
+    - name: Check the data file system
+      vars:
+        docker_rootless_fs: "{{ (docker_rootless_data_mount.stdout | from_json).filesystems[0] }}"
+        docker_rootless_image_stat: "{{ docker_rootless_data_files.results[0].stat }}"
+        docker_rootless_unit_lines: "{{ docker_rootless_data_units.results[0].stdout_lines }}"
+        docker_rootless_user_deps: "{{ docker_rootless_data_units.results[1].stdout }}"
+      ansible.builtin.assert:
+        that:
+          # The 2G image, root's alone, still mostly holes.
+          - docker_rootless_image_stat.isreg
+          - docker_rootless_image_stat.pw_name == 'root'
+          - docker_rootless_image_stat.gr_name == 'root'
+          - docker_rootless_image_stat.mode == '0600'
+          - docker_rootless_image_stat.size == 2147483648
+          - docker_rootless_image_stat.blocks * 512 < docker_rootless_image_stat.size
+          # Mounted from it through a loop device, at the daemon's data root.
+          - docker_rootless_fs.fstype == 'ext4'
+          - docker_rootless_fs.source is match('^/dev/loop[0-9]+$')
+          - docker_rootless_fs.size | int > 1900000000 and docker_rootless_fs.size | int <= 2147483648
+          - docker_rootless_data_loop.stdout | trim == docker_rootless_data_image
+          - (docker_rootless_info.stdout | from_json).DockerRootDir == docker_rootless_data_root
+          - docker_rootless_data_image_mount.stdout == docker_rootless_data_root
+          # The file system's root and lost+found are the service user's.
+          - docker_rootless_data_files.results[1:] | map(attribute='stat.pw_name') | unique == [docker_rootless_user]
+          - docker_rootless_data_files.results[1:] | map(attribute='stat.islnk') | unique == [false]
+          # The unit is enabled for, and ordered before, the service user's instance.
+          - "'ActiveState=active' in docker_rootless_unit_lines"
+          - "'UnitFileState=enabled' in docker_rootless_unit_lines"
+          # Mounted, the unit reports the loop device, whose backing file is checked above.
+          - "'What=' ~ docker_rootless_fs.source in docker_rootless_unit_lines"
+          - "'Where=' ~ docker_rootless_data_root in docker_rootless_unit_lines"
+          - "'Type=ext4' in docker_rootless_unit_lines"
+          - >-
+            docker_rootless_user_deps
+            is search('(?m)^Requires=(.* )?' ~ (docker_rootless_mount_unit | regex_escape) ~ '( |$)')
+          - >-
+            docker_rootless_user_deps
+            is search('(?m)^After=(.* )?' ~ (docker_rootless_mount_unit | regex_escape) ~ '( |$)')
+        fail_msg: >-
+          {{ docker_rootless_data_mount.stdout }} {{ docker_rootless_data_loop.stdout }}
+          {{ docker_rootless_data_files.results | map(attribute='stat') | list }}
+          {{ docker_rootless_data_units.results | map(attribute='stdout') | list }}
+          {{ docker_rootless_data_image_mount.stdout }}
+
+    # Each refusal comes before anything that would change the host.
+    - name: Try to create a data image larger than the free space
+      block:
+        - name: Run the data tasks with a size no disk here has
+          ansible.builtin.include_role:
+            name: docker_rootless
+            tasks_from: data
+          vars:
+            docker_rootless_data_image: /var/lib/docker-rootless-refusal-test.img
+            docker_rootless_data_size: 1P
+
+        - name: Record that the data tasks went on
+          ansible.builtin.set_fact:
+            docker_rootless_space_refusal: ""
+      rescue:
+        - name: Record the free-space refusal
+          ansible.builtin.set_fact:
+            docker_rootless_space_refusal: "{{ ansible_failed_result.msg }}"
+
+    - name: Try to change the data image's size
+      block:
+        - name: Run the data tasks with another size
+          ansible.builtin.include_role:
+            name: docker_rootless
+            tasks_from: data
+          vars:
+            docker_rootless_data_size: 3G
+
+        - name: Record that the data tasks went on
+          ansible.builtin.set_fact:
+            docker_rootless_size_refusal: ""
+      rescue:
+        - name: Record the size refusal
+          ansible.builtin.set_fact:
+            docker_rootless_size_refusal: "{{ ansible_failed_result.msg }}"
+
+    - name: Look at the images after the refusals
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        get_checksum: false
+      loop:
+        - /var/lib/docker-rootless-refusal-test.img
+        - /var/lib/docker-rootless-refusal-test.img.new
+        - "{{ docker_rootless_data_image }}"
+      register: docker_rootless_data_after
+
+    - name: Check the refusals
+      ansible.builtin.assert:
+        that:
+          - docker_rootless_space_refusal is search('needs at least that plus 10%')
+          - docker_rootless_size_refusal is search('is 2147483648 bytes, not the 3221225472')
+          - docker_rootless_size_refusal is search('resize2fs ' ~ (docker_rootless_data_image | regex_escape))
+          - docker_rootless_data_after.results[:2] | map(attribute='stat.exists') | list == [false, false]
+          - docker_rootless_data_after.results[2].stat.size == 2147483648
+        fail_msg: "{{ docker_rootless_space_refusal }} / {{ docker_rootless_size_refusal }}"
+
+    # Mounted, the service user's data root is the file system's, never old data.
+    - name: Run the old data check for the service user
+      ansible.builtin.include_role:
+        name: docker_rootless
+        tasks_from: old_data
+
+    # Last, because the role records the second user's IDs over the first's.
+    # The second user stands in for a host whose daemon wrote its data root
+    # before the role had a data file system. Its subordinate IDs are already
+    # in place, so the role's run changes none and restarts no daemon.
+    - name: Create the second service user
+      ansible.builtin.user:
+        name: "{{ docker_rootless_old_user }}"
+        system: true
+        home: "{{ docker_rootless_old_home }}"
+        create_home: true
+        shell: /usr/sbin/nologin
+        password_lock: true
+
+    - name: Assign the second service user's subordinate ID ranges
+      ansible.builtin.lineinfile:
+        path: /etc/{{ item }}
+        regexp: "^{{ docker_rootless_old_user }}:"
+        line: "{{ docker_rootless_old_user }}:{{ docker_rootless_old_subid_start }}:{{ docker_rootless_subid_count }}"
+      loop: [subuid, subgid]
+
+    - name: Leave old data under the second service user's unmounted data root
+      become: true
+      become_user: "{{ docker_rootless_old_user }}"
+      block:
+        - name: Create the second service user's data root
+          ansible.builtin.file:
+            path: "{{ docker_rootless_old_home }}/{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: [.local, .local/share, .local/share/docker]
+
+        - name: Write the old data
+          ansible.builtin.copy:
+            content: old layer
+            dest: "{{ docker_rootless_old_home }}/.local/share/docker/old-layer"
+            mode: "0600"
+
+    # The role's apt source needs the release, as in converge.
+    - name: Gather the facts the role needs
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Apply the role for the second service user
+      block:
+        - name: Run the role over the old data
+          ansible.builtin.include_role:
+            name: docker_rootless
+          vars:
+            docker_rootless_user: "{{ docker_rootless_old_user }}"
+            docker_rootless_home: "{{ docker_rootless_old_home }}"
+            docker_rootless_subid_start: "{{ docker_rootless_old_subid_start }}"
+            docker_rootless_data_image: "{{ docker_rootless_old_image }}"
+
+        - name: Record that the role went on
+          ansible.builtin.set_fact:
+            docker_rootless_old_refusal: ""
+      rescue:
+        - name: Record the old data refusal
+          ansible.builtin.set_fact:
+            docker_rootless_old_refusal: "{{ ansible_failed_result.msg }}"
+
+    - name: Look at the old data, the second image and the second daemon's unit after the refusal
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      loop:
+        - "{{ docker_rootless_old_home }}/.local/share/docker/old-layer"
+        - "{{ docker_rootless_old_image }}"
+        - "{{ docker_rootless_old_image }}.new"
+        - "{{ docker_rootless_old_home }}/.config/systemd/user/docker.service"
+      register: docker_rootless_old_after
+
+    - name: Read whether anything is mounted over the second user's data root
+      ansible.builtin.command:
+        argv: [findmnt, --mountpoint, "{{ docker_rootless_old_home }}/.local/share/docker"]
+      register: docker_rootless_old_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Check that the role refused before the image, the mount and the daemon
+      ansible.builtin.assert:
+        that:
+          - >-
+            docker_rootless_old_refusal
+            is search('^' ~ (docker_rootless_old_home | regex_escape) ~ '/\.local/share/docker already holds 1 entries')
+          - docker_rootless_old_refusal is search('such as old-layer,')
+          - docker_rootless_old_refusal is search('The role deletes nothing')
+          - docker_rootless_old_after.results | map(attribute='stat.exists') | list == [true, false, false, false]
+          - docker_rootless_old_mount.rc != 0
+        fail_msg: "{{ docker_rootless_old_refusal }}"

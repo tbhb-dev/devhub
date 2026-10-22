@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Retry the pending cleanup of GitHub Actions runner slot %i
+
+[Timer]
+# The service's condition skips a run while nothing is pending.
+OnCalendar=*:0/5
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

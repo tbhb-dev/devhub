@@ -1,0 +1,49 @@
+---
+# main.yml runs this before data.yml mounts the data file system and
+# before the daemon's unit is installed. Until that first mount, whatever
+# sits at the data root lies on the home's own file system, and the mount
+# would hide it. So before the first mount the role refuses a data root
+# that isn't empty, and deletes nothing. On a fresh host no daemon has run
+# and the directory doesn't exist. A rerun after a failed apply finds the
+# file system already mounted and skips the check.
+
+- name: Read whether the data file system is mounted yet
+  ansible.builtin.command:
+    argv: [findmnt, --noheadings, --output=SOURCE, --mountpoint, "{{ docker_rootless_data_root }}"]
+  register: docker_rootless_old_mounted
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Look at the data root before its first mount
+  ansible.builtin.stat:
+    path: "{{ docker_rootless_data_root }}"
+    follow: false
+    get_checksum: false
+  register: docker_rootless_old_stat
+  when: docker_rootless_old_mounted.rc != 0
+
+# A link or a file there is data.yml's to refuse.
+- name: List what the data root holds
+  ansible.builtin.find:
+    paths: "{{ docker_rootless_data_root }}"
+    file_type: any
+    hidden: true
+    recurse: false
+  register: docker_rootless_old_entries
+  when:
+    - docker_rootless_old_mounted.rc != 0
+    - docker_rootless_old_stat.stat.isdir | default(false)
+    - not docker_rootless_old_stat.stat.islnk
+
+- name: Refuse to mount the data file system over old data
+  ansible.builtin.assert:
+    that: docker_rootless_old_entries.matched == 0
+    fail_msg: >-
+      {{ docker_rootless_data_root }} already holds {{ docker_rootless_old_entries.matched }}
+      entries, such as {{ docker_rootless_old_entries.files | map(attribute='path') | map('basename')
+      | sort | first }}, and mounting the data file system there would hide them. The role deletes nothing.
+      Stop the service user's systemd instance as root with systemctl stop user@{{ docker_rootless_uid
+      }}.service, move or remove the old data by hand, and apply the role again.
+    quiet: true
+  when: docker_rootless_old_entries is not skipped

@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: tbhb
+  description: Run a pool of ephemeral GitHub Actions runners on rootless Docker
+  license: Apache-2.0
+  min_ansible_version: "2.21"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - resolute
+dependencies: []

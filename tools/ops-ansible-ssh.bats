@@ -86,3 +86,39 @@ run_ops() {
     [ ! -f "$work/argv" ]
   done
 }
+
+@test "apply-scoped connects as ops through its own agent alone, for either playbook" {
+  stubs=$work/stubs
+  mkdir -p "$stubs"
+  printf 'example-service-account-token\n' >"$work/op-token"
+  cat >"$stubs/op" <<'STUB'
+#!/bin/sh
+printf 'example-private-key\n'
+STUB
+  cat >"$stubs/ssh-agent" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >>"$work/agent-calls"
+[ "\$1" = -k ] && exit 0
+printf 'SSH_AUTH_SOCK=%s; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=4242; export SSH_AGENT_PID;\n' "\$3"
+STUB
+  cat >"$stubs/ssh-add" <<'STUB'
+#!/bin/sh
+cat >/dev/null
+STUB
+  chmod +x "$stubs"/*
+  export TECHOPS_APPLY_OP_TOKEN_FILE=$work/op-token TECHOPS_APPLY_OP_KEY_VAULT=example-vault \
+    TECHOPS_APPLY_OP_KEY_ITEM=example-item TECHOPS_APPLY_OP_KEY_FIELD=example-field
+  for name in ssh runner-pool; do
+    rm -f "$work/argv" "$work/agent-calls"
+    PATH="$stubs:$PATH" run_ops apply-scoped "$name" </dev/null
+    sock=$(sed -n 's/^-s -a \([^ ]*\) -t 3600$/\1/p' "$work/agent-calls")
+    [ -n "$sock" ]
+    [ "$(first User)" = ops ]
+    [ "$(first IdentityFile)" = "$work/ops-key.pub" ]
+    [ "$(first IdentitiesOnly)" = yes ]
+    [ "$(first IdentityAgent)" = "$sock" ]
+    [ "$(first ControlMaster)" = no ]
+    [ "$(first StrictHostKeyChecking)" = yes ]
+    grep -qx -- '-k' "$work/agent-calls"
+  done
+}

@@ -1,0 +1,183 @@
+---
+# The service user's Docker data root is an ext4 file system in a sparse
+# image file of fixed size, so images and containers' writable layers
+# can't fill the host. The image file and its mount unit are the one
+# root-owned part of the service user's Docker. Inside the file system the
+# service user owns everything, from its root directory down. main.yml runs
+# this before the daemon's unit is installed, so the daemon only ever
+# starts on the mounted file system.
+
+- name: Work out the data file system's size
+  ansible.builtin.set_fact:
+    docker_rootless_data_bytes: "{{ docker_rootless_data_size | human_to_bytes }}"
+
+- name: Name the data root's mount unit
+  ansible.builtin.command:
+    argv: [systemd-escape, --path, --suffix=mount, "{{ docker_rootless_data_root }}"]
+  register: docker_rootless_data_unit_name
+  changed_when: false
+  check_mode: false
+
+- name: Look for the data image
+  ansible.builtin.stat:
+    path: "{{ docker_rootless_data_image }}"
+    follow: false
+    get_checksum: false
+  register: docker_rootless_data_stat
+
+# An existing image is reused as it is. The role never reformats or resizes it.
+- name: Refuse a data image of another size
+  ansible.builtin.assert:
+    that:
+      - docker_rootless_data_stat.stat.isreg
+      - docker_rootless_data_stat.stat.size == docker_rootless_data_bytes | int
+    fail_msg: >-
+      {{ docker_rootless_data_image }} is {{ docker_rootless_data_stat.stat.size | default('not a file') }}
+      bytes, not the {{ docker_rootless_data_bytes }} of docker_rootless_data_size, and the role never
+      resizes it. To grow it by hand, run as root: systemctl stop user@{{ docker_rootless_uid }}.service
+      {{ docker_rootless_data_unit_name.stdout }}; truncate --size={{ docker_rootless_data_size }}
+      {{ docker_rootless_data_image }}; e2fsck -f {{ docker_rootless_data_image }}; resize2fs
+      {{ docker_rootless_data_image }}; systemctl start {{ docker_rootless_data_unit_name.stdout }}
+      user@{{ docker_rootless_uid }}.service. To shrink it, stop both units, delete the image, which holds
+      only Docker's cache, and apply the role again.
+    quiet: true
+  when: docker_rootless_data_stat.stat.exists
+
+- name: Read the free space beside the data image
+  ansible.builtin.command:
+    argv: [df, --output=avail, --block-size=1, "{{ docker_rootless_data_image | dirname }}"]
+  register: docker_rootless_data_free
+  changed_when: false
+  check_mode: false
+  when: not docker_rootless_data_stat.stat.exists
+
+# The image is sparse, so the room has to be there before the daemon fills it.
+- name: Refuse to create the data image without room for all of it plus 10%
+  vars:
+    docker_rootless_data_avail: "{{ docker_rootless_data_free.stdout_lines[-1] | trim }}"
+  ansible.builtin.assert:
+    that: docker_rootless_data_avail | int * 10 >= docker_rootless_data_bytes | int * 11
+    fail_msg: >-
+      {{ docker_rootless_data_image | dirname }} has {{ docker_rootless_data_avail }} bytes free, and a
+      data image of {{ docker_rootless_data_size }} ({{ docker_rootless_data_bytes }} bytes) needs at
+      least that plus 10%
+    quiet: true
+  when: not docker_rootless_data_stat.stat.exists
+
+# Built under another name and renamed, so an image at the final path is
+# always a whole file system. -m 0 reserves nothing for root, who never
+# writes there, and root_owner hands the file system's root to the service user.
+- name: Create the data image
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      umask 077
+      new={{ (docker_rootless_data_image ~ '.new') | quote }}
+      rm -f -- "$new"
+      truncate --size={{ docker_rootless_data_bytes }} -- "$new"
+      mkfs.ext4 -q -m 0 -E root_owner={{ docker_rootless_uid }}:{{ docker_rootless_gid }} "$new"
+      mv -- "$new" {{ docker_rootless_data_image | quote }}
+    executable: /bin/bash
+    creates: "{{ docker_rootless_data_image }}"
+
+- name: Keep the data image root's alone
+  ansible.builtin.file:
+    path: "{{ docker_rootless_data_image }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: docker_rootless_data_stat.stat.exists or not ansible_check_mode
+
+- name: Install the data root's mount unit
+  ansible.builtin.template:
+    src: docker-rootless-data.mount.j2
+    dest: /etc/systemd/system/{{ docker_rootless_data_unit_name.stdout }}
+    owner: root
+    group: root
+    mode: "0644"
+  register: docker_rootless_data_unit
+
+- name: Enable the data root's mount
+  ansible.builtin.systemd_service:
+    name: "{{ docker_rootless_data_unit_name.stdout }}"
+    daemon_reload: true
+    enabled: true
+  when: not (ansible_check_mode and docker_rootless_data_unit is changed)
+
+- name: Read whether the data file system is mounted
+  ansible.builtin.command:
+    argv: [findmnt, --noheadings, --output=SOURCE, --mountpoint, "{{ docker_rootless_data_root }}"]
+  register: docker_rootless_data_mounted
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Linger has started the service user's systemd instance, though no daemon
+# runs under it yet. It stops while the file system goes on top, so
+# nothing of the user's holds the directory underneath, and starts again
+# after the mount it now requires. Only the first run does this.
+- name: Mount the data file system with the service user's instance stopped
+  when:
+    - docker_rootless_data_mounted.rc != 0
+    - not (ansible_check_mode and docker_rootless_data_unit is changed)
+  block:
+    - name: Stop the service user's systemd instance
+      ansible.builtin.systemd_service:
+        name: user@{{ docker_rootless_uid }}.service
+        state: stopped
+
+    # As the service user, so systemd never creates the mount point as root.
+    - name: Create the mount point as the service user
+      become: true
+      become_user: "{{ docker_rootless_user }}"
+      ansible.builtin.file:
+        path: "{{ docker_rootless_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [.local, .local/share, .local/share/docker]
+
+    # Root mounts here, so no step of the path may be a link the service user made.
+    - name: Look at the mount point's path under the home
+      ansible.builtin.stat:
+        path: "{{ docker_rootless_home }}/{{ item }}"
+        follow: false
+        get_checksum: false
+      loop: [.local, .local/share, .local/share/docker]
+      register: docker_rootless_data_path
+
+    - name: Check that the mount point's path is the service user's own directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.isdir | default(false)
+          - not item.stat.islnk
+          - item.stat.pw_name == docker_rootless_user
+        fail_msg: "{{ item.stat.path | default(item.item) }} must be a directory the service user owns, not a link"
+        quiet: true
+      loop: "{{ docker_rootless_data_path.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Mount the data file system
+      ansible.builtin.systemd_service:
+        name: "{{ docker_rootless_data_unit_name.stdout }}"
+        state: started
+
+    - name: Look for a lost+found that root owns
+      ansible.builtin.stat:
+        path: "{{ docker_rootless_data_root }}/lost+found"
+        follow: false
+        get_checksum: false
+      register: docker_rootless_data_lost
+
+    # mkfs makes it root's. Only a real directory root owns changes hands,
+    # so a link the service user planted is never followed.
+    - name: Give the service user the file system's lost+found
+      ansible.builtin.file:
+        path: "{{ docker_rootless_data_root }}/lost+found"
+        owner: "{{ docker_rootless_user }}"
+        group: "{{ docker_rootless_user }}"
+        follow: false
+      when:
+        - docker_rootless_data_lost.stat.isdir | default(false)
+        - not docker_rootless_data_lost.stat.islnk
+        - docker_rootless_data_lost.stat.uid == 0

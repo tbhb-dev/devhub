@@ -1,0 +1,6 @@
+---
+- name: Reload the runner egress table
+  ansible.builtin.systemd_service:
+    name: actions-runner-egress.service
+    state: reloaded
+  when: not (ansible_check_mode and actions_runner_pool_egress_unit is changed)

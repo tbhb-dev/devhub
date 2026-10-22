@@ -1,0 +1,63 @@
+# {{ ansible_managed }}
+[Unit]
+Description=GitHub Actions runner slot %i
+Documentation=https://docs.github.com/actions/hosting-your-own-runners
+Requires=docker.service
+After=docker.service
+# A completed job resets the restart counter and this limit, through
+# ExecStopPost below, so the limit counts failed starts in a row only. The
+# backoff allows about ten of those in the first hour, so the limit stops
+# only a unit something else keeps starting.
+StartLimitIntervalSec=1h
+StartLimitBurst=20
+
+[Service]
+Type=exec
+Environment=DOCKER_HOST=unix://%t/docker.sock
+# ~/.local/state/actions-runner-slot-N: the slot's pending cleanup, the
+# runner ID and the container's name, which outlives a stop and a reboot
+# until a cleanup resolves both; its lock; and the config-error marker.
+# actions-runner-cleanup@N.service shares it.
+StateDirectory=actions-runner-slot-%i
+StateDirectoryMode=0700
+# The configuration checks and the config-error marker, before each start.
+# Exit 78 there makes systemd skip the start, and Restart= doesn't fire,
+# so only a configuration error stops the restarts, never the container's
+# exit status.
+ExecCondition=%h/.local/bin/actions-runner-slot --condition %i
+# The start phase, which execs into the job's docker run.
+ExecStart=%h/.local/bin/actions-runner-slot %i
+# The stop phase, once per start, after the main process ends for any
+# reason; the next start waits for it. It removes the container, deletes
+# the registration and revokes its own token, and logs how the start
+# ended.
+ExecStopPost=%h/.local/bin/actions-runner-slot-stop %i
+# systemd keeps counting restarts across clean exits, so without the reset
+# every job would wait longer than the last until the delay reached its
+# maximum. It runs only if the stop phase succeeded. The leading - keeps a
+# failed reset from failing the job.
+ExecStopPost=-/bin/sh -c 'if [ "$$EXIT_STATUS" = 0 ]; then exec systemctl --user reset-failed %n; fi'
+Restart=always
+# 128 plus HUP, INT or TERM: a container that ended on the stop signal,
+# which the docker client passes on. The stop phase fails the start, so
+# systemd counts it as failed, when no stop was requested.
+SuccessExitStatus=129 130 143
+# Each failure in a row doubles the delay, roughly, from 10 s to 15 min.
+# A rate limit exits 75 at once, so this delay is its backoff too.
+RestartSec=10
+RestartSteps=6
+RestartMaxDelaySec=15min
+# The stop signal goes to the main process alone, and SIGKILL to the rest
+# of the unit only at the timeout. In the start phase the calls in flight
+# finish, so the JIT request and the revocation are never cut short. In
+# the job phase the docker client is the unit's only process, and the
+# container lives under the rootless daemon, where the stop phase removes
+# it.
+KillMode=mixed
+# Outlasts the stop budget, which bounds both the start phase past its
+# first stop check and the whole stop phase. systemd applies it to each
+# ExecStopPost command too.
+TimeoutStopSec={{ actions_runner_pool_cleanup_seconds + 15 }}
+
+[Install]
+WantedBy=default.target

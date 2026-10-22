@@ -7,8 +7,14 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: edge-1
-    image: ubuntu:26.04
+  # test-ansible sets MOLECULE_RUN_ID, so concurrent runs get distinct containers.
+  - name: edge-1-${MOLECULE_RUN_ID:-local}
+    # The repo inventory's groups for edge-1, so the health playbook
+    # sees the same memberships and group_vars under the suffixed name.
+    groups: [hetzner_dedicated, tailnet]
+    # The driver tags the build molecule_local/<image>, so each scenario
+    # names its own. Dockerfile.j2 builds it from ubuntu:26.04.
+    image: techops-ops-ssh:ubuntu-26.04
     dockerfile: Dockerfile.j2
     pre_build_image: false
     privileged: true
@@ -22,6 +28,11 @@ platforms:
 prerun: false
 provisioner:
   name: ansible
+  # The driver sets community.docker.docker on each host, which inventory
+  # group_vars can't override. docker_api talks to the daemon's API
+  # instead of piping modules through docker exec stdin.
+  connection_options:
+    ansible_connection: community.docker.docker_api
   inventory:
     group_vars:
       all:

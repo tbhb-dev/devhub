@@ -8,12 +8,21 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: ops-accounts-ubuntu-2604
-    image: ubuntu:26.04
+  # test-ansible sets MOLECULE_RUN_ID, so concurrent runs get distinct containers.
+  - name: ops-accounts-ubuntu-2604-${MOLECULE_RUN_ID:-local}
+    # The driver tags the build molecule_local/<image>, so each scenario
+    # names its own. Dockerfile.j2 builds it from ubuntu:26.04.
+    image: techops-ops-accounts:ubuntu-26.04
+    dockerfile: Dockerfile.j2
     pre_build_image: false
 prerun: false
 provisioner:
   name: ansible
+  # The driver sets community.docker.docker on each host, which inventory
+  # group_vars can't override. docker_api talks to the daemon's API
+  # instead of piping modules through docker exec stdin.
+  connection_options:
+    ansible_connection: community.docker.docker_api
 verifier:
   name: ansible
 scenario:

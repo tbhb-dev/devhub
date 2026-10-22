@@ -1,0 +1,12 @@
+FROM ubuntu:26.04
+
+# The driver's default Dockerfile.j2 builds FROM the platform image, which
+# here names the built tag instead. This keeps that default's apt branch.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get install -y python3 sudo bash ca-certificates iproute2 python3-apt aptitude rsync \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists \
+    && rm -f /var/lib/apt/periodic/update-success-stamp \
+    && mkdir -p /var/lib/apt/lists/partial \
+    && touch -d @0 /var/lib/apt/lists

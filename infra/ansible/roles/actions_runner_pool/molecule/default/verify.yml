@@ -262,14 +262,16 @@
         state: absent
       loop: [api.log, op.log, docker.log, dry-run, scripts, units]
 
+    # One line per call: the caller the test named in its environment, or
+    # unknown, then the arguments and the token.
     - name: Install the stub op, which records its call and prints the test key
       ansible.builtin.copy:
         dest: "{{ actions_runner_pool_test }}/stubs/op"
         mode: "0755"
         content: |
           #!/bin/sh
-          printf 'argv=%s\n' "$*" >>{{ actions_runner_pool_test }}/log/op.log
-          printf 'token=%s\n' "$OP_SERVICE_ACCOUNT_TOKEN" >>{{ actions_runner_pool_test }}/log/op.log
+          printf '%s\targv=%s\ttoken=%s\n' "${RUNNER_POOL_TEST_CALLER:-unknown}" "$*" "$OP_SERVICE_ACCOUNT_TOKEN" \
+            >>{{ actions_runner_pool_test }}/log/op.log
           cat {{ actions_runner_pool_test }}/key/app-key.pem
 
     - name: Install the stub docker, which records any call and fails
@@ -547,6 +549,7 @@
           environment:
             PATH: "{{ actions_runner_pool_stub_path }}"
             STATE_DIRECTORY: "{{ actions_runner_pool_test }}/log/dry-run"
+            RUNNER_POOL_TEST_CALLER: dry-run
           ansible.builtin.command:
             argv: ["{{ actions_runner_pool_home }}/.local/bin/actions-runner-slot", --dry-run, "1"]
             chdir: /
@@ -648,16 +651,17 @@
                 state={{ actions_runner_pool_test }}/log/real-state-$slot
                 as_runner rm -rf "$state"
                 as_runner mkdir -m 0700 "$state"
+                # phase CALLER ARGS...: CALLER names the run in the stub op's log.
                 phase() {
                   as_runner env PATH={{ actions_runner_pool_test }}/stubs:{{ actions_runner_pool_path }} \
                     ACTIONS_RUNNER_POOL_ENV={{ actions_runner_pool_test }}/log/real.env STATE_DIRECTORY="$state" \
-                    "$@"
+                    RUNNER_POOL_TEST_CALLER="$1" "${@:2}"
                 }
                 rc=0
-                phase {{ actions_runner_pool_home }}/.local/bin/actions-runner-slot "$slot" \
+                phase "real-start-$slot" {{ actions_runner_pool_home }}/.local/bin/actions-runner-slot "$slot" \
                   >"$out/slot-$slot.out" 2>"$out/slot-$slot.err" || rc=$?
                 stop_rc=0
-                phase SERVICE_RESULT=success EXIT_CODE=exited EXIT_STATUS="$rc" \
+                phase "real-stop-$slot" SERVICE_RESULT=success EXIT_CODE=exited EXIT_STATUS="$rc" \
                   {{ actions_runner_pool_home }}/.local/bin/actions-runner-slot-stop "$slot" \
                   >"$out/slot-$slot.stop.out" 2>"$out/slot-$slot.stop.err" || stop_rc=$?
                 # The stop phase resolved the pending cleanup and removed it.
@@ -788,7 +792,9 @@
           {{ actions_runner_pool_api_log.stdout_lines | map('from_json') | selectattr('scenario', 'eq', '') | list }}
         actions_runner_pool_body: "{{ actions_runner_pool_requests[2].body | from_json }}"
         actions_runner_pool_jwt_info: "{{ actions_runner_pool_jwt.stdout | from_json }}"
-        actions_runner_pool_op_argv: "{{ actions_runner_pool_op_log.stdout_lines[0] | regex_replace('^argv=', '') }}"
+        actions_runner_pool_op_calls: "{{ actions_runner_pool_op_log.stdout_lines | map('split', '\t') | list }}"
+        actions_runner_pool_op_argv: >-
+          argv=read --no-newline {{ ['op:', 'example-vault/example-item/example-field'] | join('//') }}
         actions_runner_pool_texts: >-
           {{ actions_runner_pool_rendered.results | map(attribute='content') | map('b64decode') | list }}
         actions_runner_pool_stop_timeout: >-
@@ -835,13 +841,14 @@
           - "actions_runner_pool_jwt_info.header == {'alg': 'RS256', 'typ': 'JWT'}"
           - actions_runner_pool_jwt_info.claims.iss == '123456'
           - actions_runner_pool_jwt_info.claims.exp - actions_runner_pool_jwt_info.claims.iat == 600
-          # op got the token from the 0400 file and a reference built from the
-          # parts. It ran once per token request, two lines each: the dry
-          # run's, then each real run's start phase and stop phase.
-          - actions_runner_pool_op_log.stdout_lines | length == 10
-          - actions_runner_pool_op_argv.split('://')[0] == 'read --no-newline op'
-          - actions_runner_pool_op_argv.split('://')[1] == 'example-vault/example-item/example-field'
-          - actions_runner_pool_op_log.stdout_lines[1] == 'token=' ~ actions_runner_pool_token
+          # The dry run read the key with op exactly once. Every call, the
+          # dry run's or a real run's, got the token from the 0400 file and
+          # a reference built from the parts. Check the real runs names
+          # every caller in order.
+          - actions_runner_pool_op_calls | selectattr('0', 'eq', 'dry-run') | list | length == 1
+          - actions_runner_pool_op_calls | map('length') | unique == [3]
+          - actions_runner_pool_op_calls | map(attribute='1') | unique == [actions_runner_pool_op_argv]
+          - actions_runner_pool_op_calls | map(attribute='2') | unique == ['token=' ~ actions_runner_pool_token]
           # The dry run called no docker. It would have created the slot's
           # network, inter-container traffic off, and run the pinned image
           # on it once, limited, as the docker client the unit runs.
@@ -875,7 +882,7 @@
           - (actions_runner_pool_dry_run.stdout ~ actions_runner_pool_dry_run.stderr) is not search('ghs_example')
         fail_msg: >-
           Unexpected dry run: {{ actions_runner_pool_dry_run.stdout_lines }}
-          {{ actions_runner_pool_api_log.stdout_lines }}
+          {{ actions_runner_pool_api_log.stdout_lines }} op: {{ actions_runner_pool_op_log.stdout_lines }}
 
     - name: Read the start and stop phases' results
       ansible.builtin.slurp:
@@ -971,13 +978,15 @@
       changed_when: false
       failed_when: actions_runner_pool_real_leaks.rc != 1
 
+    # A count of none still prints 0 and passes here, so Check the real
+    # runs fails on it with the runs' output.
     - name: Count the service user's journal entries, the sampled containers and their processes
       ansible.builtin.shell:
         cmd: >-
           set -o pipefail &&
           journalctl _UID={{ actions_runner_pool_uid }} --no-pager -o cat | wc -l &&
           jq -rs 'map(.[]) | map(.Config.Labels["actions-runner-pool.slot"]) | unique | join(" ")' inspect.json &&
-          grep -c -F /home/runner/run.sh cmdline.txt
+          { grep -c -F /home/runner/run.sh cmdline.txt || [ "$?" -eq 1 ]; }
         executable: /bin/bash
         chdir: "{{ actions_runner_pool_test }}/log/real"
       register: actions_runner_pool_real_counts
@@ -998,6 +1007,8 @@
              | map(attribute='call') | list }}
         actions_runner_pool_leftover: "{{ actions_runner_pool_real_state.results[0].stdout }}"
         actions_runner_pool_networks: "{{ actions_runner_pool_real_state.results[1].stdout | from_json }}"
+        actions_runner_pool_op_callers: "{{ actions_runner_pool_op_log.stdout_lines
+          | map('split', '\t') | map('first') | list }}"
       ansible.builtin.assert:
         that:
           # Both stand-in jobs got the JIT config on stdin and exited 0,
@@ -1018,6 +1029,11 @@
             actions_runner_pool_seen
             == (['token', 'list', 'jit', 'revoke', 'token', 'delete', 'revoke'] * 2)
             | map('extract', actions_runner_pool_calls) | list
+          # op ran once in each phase, for its token, and nothing else
+          # with the stub op on its PATH called it.
+          - >-
+            actions_runner_pool_op_callers
+            == ['dry-run', 'real-start-1', 'real-stop-1', 'real-start-2', 'real-stop-2']
           - actions_runner_pool_start_logs | map('from_json') | map(attribute='event') | unique == ['registered']
           - actions_runner_pool_outputs['slot-1.out'] ~ actions_runner_pool_outputs['slot-2.out'] == ''
           - actions_runner_pool_outputs['slot-1.stop.err'] ~ actions_runner_pool_outputs['slot-2.stop.err'] == ''
@@ -1044,6 +1060,7 @@
           {{ actions_runner_pool_real.stdout_lines }} {{ actions_runner_pool_jobs }} {{ actions_runner_pool_seen }}
           {{ actions_runner_pool_leftover }} {{ actions_runner_pool_real_counts.stdout_lines }}
           {{ actions_runner_pool_outputs['files.txt'] }} {{ actions_runner_pool_start_logs }}
+          op: {{ actions_runner_pool_op_log.stdout_lines }}
 
     - name: Read the slot units' results
       ansible.builtin.slurp:

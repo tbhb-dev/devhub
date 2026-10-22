@@ -19,6 +19,8 @@ setup() {
       exit
     }
   ' "$root/.agents/agent-skills.conf")
+  # An empty pattern matches every path under Bash =~, so a missing owner_paths must fail here.
+  [ -n "$re" ]
 
   unset GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE GIT_INDEX_FILE
   # A user's global excludes file must not add matches beyond CODEOWNERS.

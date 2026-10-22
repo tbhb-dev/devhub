@@ -1,0 +1,4 @@
+---
+# Where the rootless daemon keeps its data, and where data.yml mounts the
+# data file system.
+docker_rootless_data_root: "{{ docker_rootless_home }}/.local/share/docker"

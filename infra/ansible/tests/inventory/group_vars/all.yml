@@ -7,3 +7,14 @@ ops_accounts_ro_keys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMGw+YV4N01IYPAQC60UXUk+TZNrSPuT+0VWaENyHEjh example-ops-ro
 ops_accounts_admin_keys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMBxMcLBO2dNsuwi0clAzEHghsyOUtwtQU2PXYShQKQa example-ops
+actions_runner_pool_org: example-org
+actions_runner_pool_cpus: "2"
+actions_runner_pool_memory: 4g
+actions_runner_pool_pids_limit: 4096
+actions_runner_pool_work_size: 4g
+actions_runner_pool_runner_group_id: 1
+actions_runner_pool_app_id: 123456
+actions_runner_pool_installation_id: 12345678
+actions_runner_pool_op_key_vault: example-vault
+actions_runner_pool_op_key_item: example-item
+actions_runner_pool_op_key_field: example-field

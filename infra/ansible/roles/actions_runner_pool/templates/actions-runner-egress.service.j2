@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Keep the Actions runner pool off private and host addresses
+# The service user's systemd instance runs the daemon and the slots. It
+# requires this unit, so it never starts without the table, and stopping
+# the table stops the pool.
+Before=user@{{ actions_runner_pool_uid }}.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/actions-runner-egress.nft
+ExecReload=/usr/sbin/nft -f /etc/nftables.d/actions-runner-egress.nft
+ExecStop=-/usr/sbin/nft delete table inet actions_runner_egress
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=user@{{ actions_runner_pool_uid }}.service

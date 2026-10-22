@@ -292,6 +292,21 @@ max-complexity = 15
 # purpose: the pinned toolchain puts them on PATH.
 "tools/*.py" = ["T201", "S603", "S607"]
 
+# The Molecule test helpers are test harnesses: asserts and literal
+# expected values are the test API (S101, PLR2004), and Molecule copies
+# each one to the instance on its own, so it has no package (INP001).
+# S603 and S607 join because a helper calls docker, systemctl and the
+# scripts under test by name on purpose, and T201 because its output is
+# the report.
+"infra/ansible/roles/*/molecule/*/files/*.py" = [
+  "S101",
+  "PLR2004",
+  "INP001",
+  "S603",
+  "S607",
+  "T201",
+]
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

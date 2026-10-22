@@ -1,0 +1,3 @@
+---
+- name: Run the runner pool playbook
+  ansible.builtin.import_playbook: ../../../../playbooks/runner-pool.yml

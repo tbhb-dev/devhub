@@ -1,0 +1,106 @@
+---
+argument_specs:
+  main:
+    short_description: Run a pool of ephemeral GitHub Actions runners on rootless Docker
+    description:
+      - Needs the service user and its rootless daemon from the docker_rootless role.
+      - Each slot runs one job per start of its systemd user unit, in a fresh container.
+      - >-
+        Nothing of the runner is root-owned. The one root-side exception, the file system that
+        holds the service user's Docker data root, belongs to docker_rootless, which sizes it
+        with docker_rootless_data_size.
+    options:
+      actions_runner_pool_user:
+        type: str
+        default: ghrunner
+        description: Service user that runs the slots, the same as docker_rootless_user.
+      actions_runner_pool_org:
+        type: str
+        required: true
+        description: Organization the runners register with.
+      actions_runner_pool_slots:
+        type: int
+        default: 1
+        description: Number of slots, each running one job at a time.
+      actions_runner_pool_cpus:
+        type: str
+        required: true
+        description: CPU limit of each job container, as docker run --cpus takes it.
+      actions_runner_pool_memory:
+        type: str
+        required: true
+        description: Memory limit of each job container, as docker run --memory takes it.
+      actions_runner_pool_pids_limit:
+        type: int
+        required: true
+        description: Process limit of each job container.
+      actions_runner_pool_work_size:
+        type: str
+        required: true
+        description: >-
+          Size of each job's tmpfs work directory, which is the slot's disk limit for the
+          checkout and build. tmpfs pages count against the memory limit.
+      actions_runner_pool_labels:
+        type: list
+        elements: str
+        default: [self-hosted, tbhb-dev-private]
+        description: Labels the runners register with.
+      actions_runner_pool_dns:
+        type: list
+        elements: str
+        default: [1.1.1.1, 9.9.9.9]
+        description: >-
+          Resolvers each job container gets, one docker run --dns per entry. They must be
+          public, because the egress table blocks the private and tailnet resolvers a host
+          may use.
+      actions_runner_pool_runner_group_id:
+        type: int
+        required: true
+        description: Runner group the runners join.
+      actions_runner_pool_app_id:
+        type: int
+        required: true
+        description: ID of the GitHub App that registers the runners.
+      actions_runner_pool_installation_id:
+        type: int
+        required: true
+        description: ID of the App's installation on the organization.
+      actions_runner_pool_image:
+        type: str
+        default: ghcr.io/actions/actions-runner@sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807
+        description: Runner image, pinned by digest.
+      actions_runner_pool_op_token_file:
+        type: str
+        default: .config/actions-runner/op-service-account-token
+        description: >-
+          Path, relative to the service user's home, of the 1Password service-account token.
+          The operator places it with mode 0400; the role never writes it.
+      actions_runner_pool_op_key_vault:
+        type: str
+        required: true
+        description: 1Password vault that holds the App's private key.
+      actions_runner_pool_op_key_item:
+        type: str
+        required: true
+        description: 1Password item that holds the App's private key.
+      actions_runner_pool_op_key_field:
+        type: str
+        required: true
+        description: Field of that item with the PEM private key.
+      actions_runner_pool_api_url:
+        type: str
+        default: https://api.github.com
+        description: GitHub REST API base URL, without a trailing slash.
+      actions_runner_pool_name_prefix:
+        type: str
+        default: pool
+        description: >-
+          First part of each runner's name, <prefix>-<host alias>-<slot>-<random>, letters and
+          digits only. With no hyphen in it, a name yields exactly one prefix, host alias and
+          slot, so a slot's cleanup of its own stale runners can't match another's.
+      actions_runner_pool_start:
+        type: bool
+        default: true
+        description: >-
+          Start the slots as well as enabling them. The Molecule scenario turns this off so
+          no slot reaches 1Password or GitHub.

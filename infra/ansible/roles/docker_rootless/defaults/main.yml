@@ -1,0 +1,15 @@
+---
+docker_rootless_user: ghrunner
+# A service account's state belongs under /var/lib, beside the system
+# daemon's own, and away from the human accounts under /home.
+docker_rootless_home: /var/lib/ghrunner
+# Above the ranges useradd hands to the first few login accounts. The role
+# fails rather than reuse a range another entry already holds.
+docker_rootless_subid_start: 524288
+docker_rootless_subid_count: 65536
+# The daemon's data root is a file system of this size, in a sparse image
+# file root owns: the one root-side part of the service user's Docker. The
+# role creates the image once and never resizes it. Empty means no data
+# file system, and the data root stays on the home's.
+docker_rootless_data_size: 100G
+docker_rootless_data_image: /var/lib/docker-rootless-data.img

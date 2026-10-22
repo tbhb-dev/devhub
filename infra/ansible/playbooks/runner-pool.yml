@@ -1,0 +1,15 @@
+---
+# The GitHub Actions runner pool. Root, through ops' sudo, installs the
+# packages, the service user, the linger flag and the egress table; every
+# task under the service user's home becomes that user instead.
+- name: Apply the Actions runner pool
+  hosts: edge-1
+  gather_facts: true
+  # The min subset carries the release and architecture the apt sources need.
+  gather_subset: [min]
+  become: true
+  roles:
+    - docker_rootless
+    - role: actions_runner_pool
+      vars:
+        actions_runner_pool_user: "{{ docker_rootless_user | default('ghrunner') }}"

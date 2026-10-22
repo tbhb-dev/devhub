@@ -1,0 +1,21 @@
+FROM ubuntu:26.04
+
+ENV container=docker
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod +x /usr/sbin/policy-rc.d \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        python3 python3-apt systemd systemd-sysv dbus sudo ca-certificates apparmor \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm /usr/sbin/policy-rc.d \
+    && useradd --create-home --shell /bin/bash ops \
+    && printf 'ops ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/ops \
+    && chmod 0440 /etc/sudoers.d/ops
+
+# A container can't load kernel modules.
+RUN systemctl mask systemd-modules-load.service
+
+# The test container has no virtual console for a login prompt.
+RUN systemctl mask getty@tty1.service
+
+CMD ["/sbin/init"]

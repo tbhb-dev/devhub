@@ -1,0 +1,34 @@
+---
+# The sink runs after the egress table and drops the probes that get past
+# it, so no probe leaves the container. Its counters say which probes the
+# egress table let through.
+- name: Prepare the egress test
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the blocked ranges
+      ansible.builtin.include_vars:
+        file: ../../vars/main.yml
+
+    - name: Add the probe sink table
+      vars:
+        actions_runner_pool_probe_blocked: >-
+          {{ actions_runner_pool_egress_blocked_v4[0] | regex_replace('0/[0-9]+$', '1') }}
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          if ! nft list table inet runner_probe_sink >/dev/null 2>&1; then
+            nft -f - <<'EOF'
+          table inet runner_probe_sink {
+              chain output {
+                  type filter hook output priority 10; policy accept;
+                  ip daddr {{ actions_runner_pool_probe_blocked }} udp dport 9 counter drop
+                  ip daddr 192.0.2.1 udp dport 9 counter drop
+              }
+          }
+          EOF
+            echo created
+          fi
+      register: actions_runner_pool_sink
+      changed_when: "'created' in actions_runner_pool_sink.stdout"

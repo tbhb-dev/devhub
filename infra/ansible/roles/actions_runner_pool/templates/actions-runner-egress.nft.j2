@@ -1,0 +1,45 @@
+# {{ ansible_managed }}
+# Only sockets the service user owns match. pasta opens the rootless
+# daemon's and every job container's connections as that user, so this
+# one chain covers the whole pool. Other tables stay as they are.
+table inet actions_runner_egress
+delete table inet actions_runner_egress
+table inet actions_runner_egress {
+    set blocked_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { {{ actions_runner_pool_egress_blocked_v4 | join(', ') }} }
+    }
+
+    set blocked_v6 {
+        type ipv6_addr
+        flags interval
+        elements = { {{ actions_runner_pool_egress_blocked_v6 | join(', ') }} }
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+        # A packet with no socket, such as a closed connection's last ACK,
+        # has no owner to match and passes, whoever's connection it ends.
+        meta skuid {{ actions_runner_pool_uid }} jump service_user
+    }
+
+    chain service_user {
+        # The resolver stub is the one host address the pool may reach. Job
+        # containers get public resolvers instead; the stub is for the
+        # service user's processes on the host: the supervisor's curl and
+        # op, and the daemon's image pulls. Host loopback is off in
+        # rootlesskit, so a container can't reach the stub through pasta's
+        # gateway, but pasta still relays DNS sent to its DNS forward address
+        # to the host's first resolver, and that relay matches here too. So a
+        # job can query the stub and resolve any name the host resolves. That
+        # is accepted: every private, carrier-grade NAT and ULA destination
+        # stays blocked below, so the job can't connect to one. The stub's own
+        # upstream queries belong to systemd-resolved's user, not this one,
+        # and are outside this table.
+        ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept
+        fib daddr type local counter drop
+        ip daddr @blocked_v4 counter drop
+        ip6 daddr @blocked_v6 counter drop
+    }
+}

@@ -8,3 +8,11 @@
 # tailnet names, account names or project identifiers. May be empty. An entry
 # under four characters is skipped, and an entry cannot contain a comma.
 TECHOPS_PRIVATE_STRINGS = "host.example.invalid, project.example.invalid"
+# ops:apply-scoped loads the ops key from 1Password into a private
+# ssh-agent. The token file holds a service account's token, readable only
+# by you; the vault, item and field name where the key is. With an SSH key
+# item, the field takes the query that asks for OpenSSH format.
+TECHOPS_APPLY_OP_TOKEN_FILE = "~/.config/techops/example-service-account-token"
+TECHOPS_APPLY_OP_KEY_VAULT = "example-vault"
+TECHOPS_APPLY_OP_KEY_ITEM = "example-ops-key"
+TECHOPS_APPLY_OP_KEY_FIELD = "private key?ssh-format=openssh"

@@ -1,0 +1,15 @@
+---
+# The organization, the App, the runner group, the 1Password references
+# and the per-slot limits have no default: the private inventory sets them.
+actions_runner_pool_user: ghrunner
+actions_runner_pool_slots: 1
+actions_runner_pool_labels: [self-hosted, tbhb-dev-private]
+# Public resolvers, because the egress table blocks the host's private or tailnet ones.
+actions_runner_pool_dns: [1.1.1.1, 9.9.9.9]
+# ghcr.io/actions/actions-runner:2.338.0, the image index digest.
+# yamllint disable-line rule:line-length
+actions_runner_pool_image: ghcr.io/actions/actions-runner@sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807
+actions_runner_pool_op_token_file: .config/actions-runner/op-service-account-token
+actions_runner_pool_api_url: https://api.github.com
+actions_runner_pool_name_prefix: pool
+actions_runner_pool_start: true

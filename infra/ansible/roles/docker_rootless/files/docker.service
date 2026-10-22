@@ -1,0 +1,34 @@
+[Unit]
+Description=Docker Application Container Engine (Rootless)
+Documentation=https://docs.docker.com/go/rootless/
+Requires=dbus.socket
+StartLimitBurst=3
+StartLimitIntervalSec=60s
+
+[Service]
+Environment=PATH=/usr/bin:/usr/sbin:/bin:/sbin
+# pasta opens the daemon's and the containers' connections as this user,
+# which is what the runner pool's egress table matches.
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=pasta
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=implicit
+# dockerd-rootless.sh already passes rootlesskit --disable-host-loopback
+# unless this says false; set here so a changed default can't open it.
+# With it, pasta runs with --no-map-gw, so a container can't reach the
+# host's 127.0.0.1 or its resolver stub through the gateway address.
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true
+ExecStart=/usr/bin/dockerd-rootless.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+RestartSec=2
+Restart=always
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+Type=notify
+NotifyAccess=all
+KillMode=mixed
+
+[Install]
+WantedBy=default.target

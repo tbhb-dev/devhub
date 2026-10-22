@@ -1,0 +1,266 @@
+---
+# Root installs the packages and the egress table with its unit. The
+# supervisor, its settings and the user units are written as the service
+# user, under its home.
+
+- name: Check the pool settings
+  ansible.builtin.assert:
+    that:
+      - actions_runner_pool_slots >= 1
+      - actions_runner_pool_labels | length > 0
+      - actions_runner_pool_dns | length > 0
+      - actions_runner_pool_image is match('^[^@\s]+@sha256:[0-9a-f]{64}$')
+      - actions_runner_pool_api_url is match('^https?://\S+[^/]$')
+      # No hyphen, so a runner's name yields exactly one prefix, host and slot.
+      - actions_runner_pool_name_prefix is match('^[A-Za-z0-9]+$')
+      - actions_runner_pool_op_token_file is not match('^/')
+      - "'..' not in actions_runner_pool_op_token_file.split('/')"
+    fail_msg: >-
+      The pool needs at least one slot, one label and one resolver, an image pinned by
+      digest, an API URL without a trailing slash, a name prefix of letters and digits,
+      and a token path inside the home
+    quiet: true
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Pinned by checksum. The key's fingerprint is
+# 3FEF 9748 469A DBE1 5DA7 CA80 AC2D 6274 2012 EA22.
+- name: Install 1Password's apt signing key
+  ansible.builtin.get_url:
+    url: https://downloads.1password.com/linux/keys/1password.asc
+    dest: /etc/apt/keyrings/1password.asc
+    checksum: sha256:f39e7dd9dedc581ced85732832f217e0de5860a3b80279b5af4bc7c6d8157bae
+    owner: root
+    group: root
+    mode: "0644"
+  register: actions_runner_pool_key
+
+- name: Add 1Password's apt repository
+  vars:
+    actions_runner_pool_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts.architecture] }}"
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/1password.sources
+    content: |
+      Types: deb
+      URIs: https://downloads.1password.com/linux/debian/{{ actions_runner_pool_arch }}
+      Suites: stable
+      Components: main
+      Architectures: {{ actions_runner_pool_arch }}
+      Signed-By: /etc/apt/keyrings/1password.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: actions_runner_pool_source
+
+# A check run hasn't written the repository, so it skips the packages too.
+- name: Refresh the package index for the new repository
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - actions_runner_pool_key is changed or actions_runner_pool_source is changed
+    - not ansible_check_mode
+
+- name: Install the 1Password CLI and the tools the supervisor needs
+  ansible.builtin.apt:
+    name: [1password-cli, curl, jq, nftables, openssl]
+    state: present
+    install_recommends: false
+    # Do not let package installation start the stock flushing service.
+    policy_rc_d: 101
+  register: actions_runner_pool_packages
+  when: not (ansible_check_mode and (actions_runner_pool_key is changed or actions_runner_pool_source is changed))
+
+- name: Look up the service user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ actions_runner_pool_user }}"
+    fail_key: false
+
+- name: Stop a check run at a service user it would create
+  ansible.builtin.meta: end_role
+  when: ansible_check_mode and ansible_facts.getent_passwd[actions_runner_pool_user] is none
+
+- name: Require the service user from docker_rootless
+  ansible.builtin.assert:
+    that: ansible_facts.getent_passwd[actions_runner_pool_user] is not none
+    fail_msg: The service user doesn't exist; apply docker_rootless first
+    quiet: true
+
+- name: Record the service user's ID and home
+  ansible.builtin.set_fact:
+    actions_runner_pool_uid: "{{ ansible_facts.getent_passwd[actions_runner_pool_user][1] }}"
+    actions_runner_pool_home: "{{ ansible_facts.getent_passwd[actions_runner_pool_user][4] }}"
+
+- name: Create the firewall configuration directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the runner egress table
+  ansible.builtin.template:
+    src: actions-runner-egress.nft.j2
+    dest: /etc/nftables.d/actions-runner-egress.nft
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Reload the runner egress table
+  when: not (ansible_check_mode and actions_runner_pool_packages is changed)
+
+- name: Install the runner egress unit
+  ansible.builtin.template:
+    src: actions-runner-egress.service.j2
+    dest: /etc/systemd/system/actions-runner-egress.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: actions_runner_pool_egress_unit
+  notify: Reload the runner egress table
+
+- name: Enable and start the runner egress table
+  ansible.builtin.systemd_service:
+    name: actions-runner-egress.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not (ansible_check_mode and actions_runner_pool_egress_unit is changed)
+
+- name: Install the supervisor and its units as the service user
+  become: true
+  become_user: "{{ actions_runner_pool_user }}"
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ actions_runner_pool_uid }}
+  block:
+    - name: Create the supervisor's directories
+      ansible.builtin.file:
+        path: "{{ actions_runner_pool_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - .local
+        - .local/bin
+        - .local/lib
+        - .local/lib/actions-runner
+        - .config
+        - .config/actions-runner
+        - .config/systemd
+        - .config/systemd/user
+
+    # The start phase, the stop phase, and the library both source.
+    - name: Install the supervisor
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ actions_runner_pool_home }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: actions-runner-slot.sh, dest: .local/bin/actions-runner-slot, mode: "0700"}
+        - {src: actions-runner-slot-stop.sh, dest: .local/bin/actions-runner-slot-stop, mode: "0700"}
+        - src: actions-runner-slot-lib.sh
+          dest: .local/lib/actions-runner/actions-runner-slot-lib.sh
+          mode: "0600"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # The values are private to the operator, so they stay out of the diff.
+    - name: Write the supervisor's settings
+      ansible.builtin.template:
+        src: pool.env.j2
+        dest: "{{ actions_runner_pool_home }}/.config/actions-runner/pool.env"
+        mode: "0600"
+      diff: false
+
+    - name: Look for the service-account token
+      ansible.builtin.stat:
+        path: "{{ actions_runner_pool_home }}/{{ actions_runner_pool_op_token_file }}"
+      register: actions_runner_pool_token
+
+    - name: Report a missing service-account token
+      ansible.builtin.debug:
+        msg: >-
+          The 1Password service-account token is not in place, so every slot fails until the
+          operator installs it, owned by {{ actions_runner_pool_user }} with mode 0400, at
+          actions_runner_pool_op_token_file under the home.
+      when: not actions_runner_pool_token.stat.exists
+
+    # The slot unit's stop timeout derives from the stop budget.
+    - name: Install the slot unit
+      ansible.builtin.template:
+        src: actions-runner@.service.j2
+        dest: "{{ actions_runner_pool_home }}/.config/systemd/user/actions-runner@.service"
+        mode: "0644"
+      register: actions_runner_pool_slot_unit
+
+    - name: Install the prune units
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ actions_runner_pool_home }}/.config/systemd/user/{{ item }}"
+        mode: "0644"
+      loop: [actions-runner-prune.service, actions-runner-prune.timer]
+      register: actions_runner_pool_units
+
+    # The cleanup service's stop timeout derives from the stop budget too.
+    - name: Install the cleanup retry units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ actions_runner_pool_home }}/.config/systemd/user/{{ item }}"
+        mode: "0644"
+      loop: [actions-runner-cleanup@.service, actions-runner-cleanup@.timer]
+      register: actions_runner_pool_cleanup_units
+
+    - name: Enable and start the prune timer
+      ansible.builtin.systemd_service:
+        name: actions-runner-prune.timer
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+      when: not (ansible_check_mode and actions_runner_pool_units is changed)
+
+    # Each slot's timer retries a cleanup a stop left pending. A slot beyond
+    # the slot count keeps its timer, which does nothing while nothing of
+    # that slot is pending.
+    - name: Enable and start the cleanup timers
+      ansible.builtin.systemd_service:
+        name: actions-runner-cleanup@{{ item }}.timer
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+      loop: "{{ range(1, actions_runner_pool_slots + 1) | list }}"
+      when: not (ansible_check_mode and actions_runner_pool_cleanup_units is changed)
+
+    # A slot runs its next job from the files on disk, so a changed
+    # supervisor or setting needs no restart.
+    - name: Enable the slots
+      ansible.builtin.systemd_service:
+        name: actions-runner@{{ item }}.service
+        scope: user
+        enabled: true
+        state: "{{ 'started' if actions_runner_pool_start else omit }}"
+      loop: "{{ range(1, actions_runner_pool_slots + 1) | list }}"
+      when: not (ansible_check_mode and actions_runner_pool_slot_unit is changed)
+
+    - name: Find enabled slots
+      ansible.builtin.find:
+        paths: "{{ actions_runner_pool_home }}/.config/systemd/user/default.target.wants"
+        patterns: actions-runner@*.service
+        file_type: link
+      register: actions_runner_pool_enabled
+
+    - name: Disable the slots beyond the slot count
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        enabled: false
+        state: stopped
+      loop: "{{ actions_runner_pool_enabled.files | map(attribute='path') | map('basename') | list }}"
+      when: item | regex_search('[0-9]+') | int > actions_runner_pool_slots

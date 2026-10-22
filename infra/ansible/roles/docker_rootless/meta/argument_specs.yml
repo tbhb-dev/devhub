@@ -1,0 +1,47 @@
+---
+argument_specs:
+  main:
+    short_description: Run Docker rootless as an unprivileged service user
+    description:
+      - >-
+        Nothing of the daemon is root-owned, with one sanctioned exception. By default the
+        service user's Docker data root is a fixed-size ext4 file system in a sparse image file,
+        which root owns with mode 0600, mounted by a root-owned systemd mount unit before the
+        user's systemd instance starts. Inside that file system the service user owns
+        everything, the root directory and lost+found included.
+      - >-
+        The role mounts that file system before it installs or starts the daemon. Before the
+        first mount it refuses a data root that already holds anything, and deletes nothing.
+    options:
+      docker_rootless_user:
+        type: str
+        default: ghrunner
+        description: Service user that owns the rootless daemon. It gets a locked password and no login shell.
+      docker_rootless_home:
+        type: path
+        default: /var/lib/ghrunner
+        description: Home directory of the service user, which holds the daemon's data and user units.
+      docker_rootless_subid_start:
+        type: int
+        default: 524288
+        description: First subordinate UID and GID of the service user. The range must not overlap another entry.
+      docker_rootless_subid_count:
+        type: int
+        default: 65536
+        description: Number of subordinate UIDs and GIDs. Rootless Docker needs at least 65536.
+      docker_rootless_data_size:
+        type: str
+        default: 100G
+        description: >-
+          Size of the file system that holds the service user's Docker data root, which bounds
+          its images and every container's writable layer together. The role creates the image
+          only with this much free beside it plus 10%, reuses an image of this size as it is,
+          and refuses any other size with the steps to grow it by hand. Empty means no data
+          file system, so the data root stays on the home's file system. An image and mount
+          unit from an earlier run stay as they are.
+      docker_rootless_data_image:
+        type: str
+        default: /var/lib/docker-rootless-data.img
+        description: >-
+          Path of the sparse image file that holds that file system, directly under /var/lib
+          and outside the service user's home. Root owns it, with mode 0600.

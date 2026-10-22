@@ -1,0 +1,77 @@
+---
+# The same container as docker_rootless' scenario: privileged under
+# systemd, a private cgroup namespace so the rootless daemon finds its
+# controllers, and a volume for the service user's home so its overlayfs
+# snapshotter has a real file system under it. See that file for why.
+#
+# The pool settings are placeholders. The API URL points at the stub that
+# verify starts on loopback. Converge leaves the slots stopped, and verify
+# starts them only with drop-ins that point them at the stubs, so no slot
+# ever reaches 1Password or GitHub.
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: docker
+platforms:
+  # test-ansible sets MOLECULE_RUN_ID, so concurrent runs get distinct containers.
+  - name: edge-1-${MOLECULE_RUN_ID:-local}
+    # The playbook targets edge-1, which here names the group.
+    groups: [edge-1]
+    # The driver tags the build molecule_local/<image>, so each scenario
+    # names its own. Dockerfile.j2 builds it from ubuntu:26.04.
+    image: techops-actions-runner-pool:ubuntu-26.04
+    dockerfile: Dockerfile.j2
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    cgroupns_mode: private
+    volumes:
+      - /var/lib/ghrunner
+    keep_volumes: false
+    tmpfs:
+      - /run
+      - /tmp
+prerun: false
+provisioner:
+  name: ansible
+  # The driver sets community.docker.docker on each host, which inventory
+  # group_vars can't override. docker_api talks to the daemon's API
+  # instead of piping modules through docker exec stdin.
+  connection_options:
+    ansible_connection: community.docker.docker_api
+  inventory:
+    group_vars:
+      all:
+        ansible_user: ops
+        actions_runner_pool_org: example-org
+        actions_runner_pool_slots: 2
+        actions_runner_pool_cpus: "1"
+        actions_runner_pool_memory: 512m
+        actions_runner_pool_pids_limit: 256
+        actions_runner_pool_work_size: 256m
+        actions_runner_pool_runner_group_id: 3
+        actions_runner_pool_app_id: 123456
+        actions_runner_pool_installation_id: 12345678
+        actions_runner_pool_op_key_vault: example-vault
+        actions_runner_pool_op_key_item: example-item
+        actions_runner_pool_op_key_field: example-field
+        actions_runner_pool_api_url: http://127.0.0.1:18089
+        actions_runner_pool_start: false
+        # Room for the test images; the image file is sparse.
+        docker_rootless_data_size: 2G
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    # Adds the sink table the egress probes end in, which converge must
+    # leave alone.
+    - prepare
+    - check
+    - converge
+    - idempotence
+    - verify
+    - destroy

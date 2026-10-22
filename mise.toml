@@ -646,6 +646,14 @@ description = "Apply a playbook to the real hosts as ops; operator-only, refused
 env = { LC_ALL = "C.UTF-8" }
 run = "bash tools/ops-ansible.sh apply"
 
+# The one apply an agent may run unattended: playbooks/ssh.yml or
+# playbooks/runner-pool.yml only, named as ssh or runner-pool, with the ops
+# key from a 1Password service account in a private ssh-agent.
+[tasks."ops:apply-scoped"]
+description = "Apply the ssh or runner-pool playbook as ops through a private agent; allowed without a terminal"
+env = { LC_ALL = "C.UTF-8" }
+run = "bash tools/ops-ansible.sh apply-scoped"
+
 # --- JS/TS and nx tasks (upstream candidate: pnpm pin and nx tasks, not yet filed) ---
 # nx wraps the toolchain: project.json targets call the underlying go, uv,
 # or pnpm command, which buys caching and `nx affected`. mise stays the

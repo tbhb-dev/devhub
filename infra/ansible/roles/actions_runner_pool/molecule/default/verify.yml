@@ -675,6 +675,84 @@
             chdir: /
           register: actions_runner_pool_real
           changed_when: true
+          failed_when: false
+
+        - name: Read the real runs' output and samples
+          ansible.builtin.command:
+            cmd: cat {{ item }}
+            chdir: "{{ actions_runner_pool_test }}/log/real"
+          loop:
+            - slot-1.out
+            - slot-2.out
+            - slot-1.err
+            - slot-2.err
+            - slot-1.stop.out
+            - slot-2.stop.out
+            - slot-1.stop.err
+            - slot-2.stop.err
+            - files.txt
+          register: actions_runner_pool_real_files
+          changed_when: false
+          failed_when: false
+
+        - name: Read the service user's journal after the real runs
+          ansible.builtin.command:
+            cmd: journalctl _UID={{ actions_runner_pool_uid }} --no-pager -o cat
+          register: actions_runner_pool_real_journal
+          changed_when: false
+          failed_when: false
+
+        # Report the captured failures before reading state that only a successful
+        # start can create. No later unit case has run or changed that state yet.
+        - name: Check the real runs' start and stop phases
+          ansible.builtin.assert:
+            that:
+              - actions_runner_pool_real.rc == 0
+              - actions_runner_pool_real.stdout_lines == ['0 0', '0 0']
+              - actions_runner_pool_real_files.results | map(attribute='rc') | unique == [0]
+              - actions_runner_pool_real_journal.rc == 0
+            fail_msg: >-
+              phases: {{ actions_runner_pool_real }}
+              output: {{ actions_runner_pool_real_files.results }}
+              journal: {{ actions_runner_pool_real_journal }}
+
+        - name: Read what the real runs left, as the service user
+          become: true
+          become_user: "{{ actions_runner_pool_user }}"
+          environment: "{{ actions_runner_pool_env }}"
+          ansible.builtin.command:
+            cmd: "{{ item }}"
+            chdir: /
+          loop:
+            - docker ps --all --quiet --filter name=^runner-pool-leftover$
+            - docker network inspect pool-slot-1 pool-slot-2
+          register: actions_runner_pool_real_state
+          changed_when: false
+          failed_when: false
+
+        - name: Check the real runs' containers and networks before the unit cases
+          vars:
+            actions_runner_pool_leftover: "{{ actions_runner_pool_real_state.results[0].stdout }}"
+            actions_runner_pool_networks: "{{ actions_runner_pool_real_state.results[1].stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - actions_runner_pool_real_state.results | map(attribute='rc') | unique == [0]
+              # Slot 1's leftover container is gone, and each slot has its own
+              # network, created or replaced with inter-container traffic off.
+              - actions_runner_pool_leftover == ''
+              - actions_runner_pool_networks | map(attribute='Name') | list == ['pool-slot-1', 'pool-slot-2']
+              - actions_runner_pool_networks | map(attribute='Driver') | unique == ['bridge']
+              - >-
+                actions_runner_pool_networks | map(attribute='Labels') | list
+                == [{'actions-runner-pool.slot': '1'}, {'actions-runner-pool.slot': '2'}]
+              - >-
+                actions_runner_pool_networks | map(attribute='Options') | list
+                == [{'com.docker.network.bridge.enable_icc': 'false'}] * 2
+            fail_msg: >-
+              state: {{ actions_runner_pool_real_state.results }}
+              phases: {{ actions_runner_pool_real }}
+              output: {{ actions_runner_pool_real_files.results }}
+              journal: {{ actions_runner_pool_real_journal }}
 
         # Each case writes its own drop-in, which points the slot at the
         # suite's stub API and stub op and appends the unit's output to the
@@ -935,36 +1013,6 @@
           - actions_runner_pool_cells | length >= 96
         fail_msg: "{{ actions_runner_pool_scripts_run.stdout_lines | reject('match', '^PASS ') | list }}"
 
-    - name: Read what the real runs left, as the service user
-      become: true
-      become_user: "{{ actions_runner_pool_user }}"
-      environment: "{{ actions_runner_pool_env }}"
-      ansible.builtin.command:
-        cmd: "{{ item }}"
-        chdir: /
-      loop:
-        - docker ps --all --quiet --filter name=^runner-pool-leftover$
-        - docker network inspect pool-slot-1 pool-slot-2
-      register: actions_runner_pool_real_state
-      changed_when: false
-
-    - name: Read the real runs' output and samples
-      ansible.builtin.command:
-        cmd: cat {{ item }}
-        chdir: "{{ actions_runner_pool_test }}/log/real"
-      loop:
-        - slot-1.out
-        - slot-2.out
-        - slot-1.err
-        - slot-2.err
-        - slot-1.stop.out
-        - slot-2.stop.out
-        - slot-1.stop.err
-        - slot-2.stop.err
-        - files.txt
-      register: actions_runner_pool_real_files
-      changed_when: false
-
     # grep exits 1 when nothing matches.
     - name: Look for the secrets in what the sampler stored and in the service user's journal
       ansible.builtin.shell:
@@ -1005,15 +1053,10 @@
         actions_runner_pool_seen: >-
           {{ actions_runner_pool_api_log.stdout_lines | map('from_json') | selectattr('scenario', 'eq', 'real')
              | map(attribute='call') | list }}
-        actions_runner_pool_leftover: "{{ actions_runner_pool_real_state.results[0].stdout }}"
-        actions_runner_pool_networks: "{{ actions_runner_pool_real_state.results[1].stdout | from_json }}"
         actions_runner_pool_op_callers: "{{ actions_runner_pool_op_log.stdout_lines
           | map('split', '\t') | map('first') | list }}"
       ansible.builtin.assert:
         that:
-          # Both stand-in jobs got the JIT config on stdin and exited 0,
-          # and each stop phase after them exited 0.
-          - actions_runner_pool_real.stdout_lines == ['0 0', '0 0']
           - actions_runner_pool_jobs | map(attribute='slot') | list == [1, 2]
           - actions_runner_pool_jobs | map(attribute='status') | unique == [0]
           - actions_runner_pool_jobs | map(attribute='container') | unique == ['removed']
@@ -1037,17 +1080,6 @@
           - actions_runner_pool_start_logs | map('from_json') | map(attribute='event') | unique == ['registered']
           - actions_runner_pool_outputs['slot-1.out'] ~ actions_runner_pool_outputs['slot-2.out'] == ''
           - actions_runner_pool_outputs['slot-1.stop.err'] ~ actions_runner_pool_outputs['slot-2.stop.err'] == ''
-          # Slot 1's leftover container is gone, and each slot has its own
-          # network, created or replaced with inter-container traffic off.
-          - actions_runner_pool_leftover == ''
-          - actions_runner_pool_networks | map(attribute='Name') | list == ['pool-slot-1', 'pool-slot-2']
-          - actions_runner_pool_networks | map(attribute='Driver') | unique == ['bridge']
-          - >-
-            actions_runner_pool_networks | map(attribute='Labels') | list
-            == [{'actions-runner-pool.slot': '1'}, {'actions-runner-pool.slot': '2'}]
-          - >-
-            actions_runner_pool_networks | map(attribute='Options') | list
-            == [{'com.docker.network.bridge.enable_icc': 'false'}] * 2
           # The sampler saw both job containers running, and no secret
           # anywhere: process command lines, stored configuration, logs,
           # the journal, or the files under the home and the runtime directory.
@@ -1058,7 +1090,7 @@
           - actions_runner_pool_real_leaks.stdout | trim == '0'
         fail_msg: >-
           {{ actions_runner_pool_real.stdout_lines }} {{ actions_runner_pool_jobs }} {{ actions_runner_pool_seen }}
-          {{ actions_runner_pool_leftover }} {{ actions_runner_pool_real_counts.stdout_lines }}
+          {{ actions_runner_pool_real_counts.stdout_lines }}
           {{ actions_runner_pool_outputs['files.txt'] }} {{ actions_runner_pool_start_logs }}
           op: {{ actions_runner_pool_op_log.stdout_lines }}
 

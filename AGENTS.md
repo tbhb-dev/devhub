@@ -30,7 +30,7 @@ Use the alias for a host everywhere in this repository and its history. An agent
 An agent may run these tasks on its own:
 
 - `mise run lint-ansible` runs `ansible-lint` and a syntax check against a stub inventory.
-- `mise run test-ansible` runs the Molecule scenarios in Docker.
+- `mise run test-ansible` runs the Molecule scenarios in Docker over the `community.docker.docker_api` connection. Each run draws a `MOLECULE_RUN_ID` that suffixes every container name and keeps Molecule's state in a private temporary directory, so concurrent runs on one host don't collide.
 - `mise run ops:verify` runs the verification playbook against the real hosts as `ops-ro`, which has no sudo.
 
 The other two need the operator. `mise run ops:check` runs as `ops` with `--check --diff`, and the `ops` key asks the operator to approve each new session. `mise run ops:apply` stays operator-only until tbhb-dev/devtools#165 merges, and it refuses to run without a terminal.

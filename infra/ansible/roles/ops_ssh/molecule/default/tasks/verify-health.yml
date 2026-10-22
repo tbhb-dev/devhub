@@ -1,5 +1,5 @@
 ---
-# Docker's connection plugin honors ansible_user with docker exec -u.
+# The docker_api connection runs each exec as ansible_user.
 # Run the production playbook on the controller, as ops-ro without sudo.
 - name: Run the real host health playbook as ops-ro
   ansible.builtin.command:

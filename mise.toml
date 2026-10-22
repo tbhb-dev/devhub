@@ -614,7 +614,8 @@ run = [
 description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
 depends = ["install-ansible"]
 dir = "{{config_root}}/infra/ansible"
-env = { LC_ALL = "C.UTF-8", ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles" }
+# Avoid the macOS fork-safety crash when Ansible workers look up system proxies.
+env = { LC_ALL = "C.UTF-8", ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles", no_proxy = "*", NO_PROXY = "*" }
 run = [
   "bats {{config_root}}/tools/ops-ansible-ssh.bats",
   '''

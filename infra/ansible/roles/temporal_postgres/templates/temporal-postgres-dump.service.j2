@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Dump both Temporal databases
+Requires=temporal-postgres.service
+After=temporal-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/temporal-postgres-dump
+UMask=0077

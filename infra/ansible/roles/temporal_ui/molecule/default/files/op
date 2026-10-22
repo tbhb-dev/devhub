@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Scenario-only stub; never contacts a password manager.
+set -euo pipefail
+[[ $1 == read ]]
+reference=$2
+field=${reference##*/}
+item=${reference%/*}
+item=${item##*/}
+case "$item/$field" in
+example-admin/password | example-login/password) cat /run/temporal-fixtures/password ;;
+server/ca | client/ca | wrong/ca) cat /run/temporal-fixtures/ca.pem ;;
+server/certificate | client/certificate | wrong/certificate) cat "/run/temporal-fixtures/$item.pem" ;;
+server/private-key | client/private-key | wrong/private-key) cat "/run/temporal-fixtures/$item.key" ;;
+*) exit 1 ;;
+esac

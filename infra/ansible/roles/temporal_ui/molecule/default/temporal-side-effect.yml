@@ -1,0 +1,54 @@
+---
+# Import after the UI role's wrong-CA test has restored the valid certificate.
+- name: Check deployment exposure and isolation before removal
+  hosts: all
+  become: true
+  vars_files:
+    - ../../../../playbooks/vars/temporal.yml
+  tasks:
+    - name: Inspect the installed host token
+      ansible.builtin.stat:
+        path: "{{ temporal_host_op_token_file }}"
+        checksum_algorithm: sha256
+      register: temporal_ui_installed_token
+
+    - name: Verify the token installation
+      ansible.builtin.assert:
+        that:
+          - temporal_ui_installed_token.stat.mode == '0400'
+          - temporal_ui_installed_token.stat.pw_name == 'temporal'
+          - >-
+            temporal_ui_installed_token.stat.checksum ==
+            (lookup('ansible.builtin.file', temporal_host_op_token_src) | hash('sha256'))
+        quiet: true
+
+    - name: Read the installed PostgreSQL defaults
+      ansible.builtin.include_vars:
+        file: ../../../temporal_postgres/defaults/main.yml
+
+    - name: Write a real dump before removal
+      become: true
+      become_user: temporal
+      ansible.builtin.shell:
+        cmd: |
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          systemctl --user start temporal-postgres-dump.service
+      changed_when: true
+
+    - name: Check listeners and cross-daemon isolation and save retained data
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /opt/temporal-playbook-test/deployment.py
+          - before-remove
+          - "{{ temporal_server_frontend_port }}"
+          - "{{ temporal_server_metrics_port }}"
+          - "{{ temporal_ui_loopback_port }}"
+          - "{{ temporal_postgres_data_dir }}"
+          - "{{ temporal_postgres_dump_dir }}"
+          - "{{ temporal_frontend_service }}"
+          - "{{ temporal_ui_service }}"
+      changed_when: false
+
+- name: Remove Temporal
+  ansible.builtin.import_playbook: ../../../../playbooks/temporal-remove.yml

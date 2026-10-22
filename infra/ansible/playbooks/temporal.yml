@@ -1,0 +1,52 @@
+---
+# Production inventory contains edge-1 only; all also admits Molecule's run ID.
+- name: Apply Temporal
+  hosts: all
+  gather_facts: true
+  gather_subset: [min]
+  become: true
+  vars_files:
+    - vars/temporal.yml
+  pre_tasks:
+    - name: Validate the tailnet endpoints before installing anything
+      ansible.builtin.assert:
+        that:
+          - temporal_frontend_service is match('^svc:[a-z0-9][a-z0-9-]*$')
+          - temporal_ui_service is match('^svc:[a-z0-9][a-z0-9-]*$')
+          - temporal_frontend_service != temporal_ui_service
+          - temporal_server_frontend_port | int == 7233
+          - temporal_ui_loopback_port | int > 0
+          - temporal_ui_loopback_port | int <= 65535
+          - temporal_ui_loopback_port | int not in [53, 7233, temporal_server_metrics_port | int]
+        quiet: true
+  tasks:
+    - name: Set up the Temporal daemon
+      ansible.builtin.include_role:
+        name: docker_rootless
+      vars:
+        docker_rootless_user: temporal
+        docker_rootless_home: /var/lib/temporal
+        docker_rootless_subid_start: 655360
+        docker_rootless_data_image: /var/lib/temporal-docker-data.img
+
+    - name: Provision the host credentials
+      ansible.builtin.import_tasks: tasks/temporal-credentials.yml
+      vars:
+        temporal_host_token_source_path: >-
+          {{ temporal_host_op_token_src |
+             default(lookup('env', 'HOME') ~ '/.local/state/techops/temporal-host-op-token') }}
+
+    - name: Apply Temporal PostgreSQL
+      ansible.builtin.include_role:
+        name: temporal_postgres
+
+    - name: Apply the Temporal server
+      ansible.builtin.include_role:
+        name: temporal_server
+
+    - name: Apply the Temporal UI
+      ansible.builtin.include_role:
+        name: temporal_ui
+
+    - name: Expose the loopback endpoints to the tailnet
+      ansible.builtin.import_tasks: tasks/temporal-services.yml

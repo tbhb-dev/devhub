@@ -11,10 +11,12 @@
 #   apply    ops; refused without a terminal, because only the operator
 #            runs it until tbhb-dev/devtools#165 lands
 #   apply-scoped
-#            ops, playbooks/ssh.yml or playbooks/runner-pool.yml and
-#            nothing else; allowed without a terminal, so an agent can run
+#            ops, playbooks/ssh.yml, playbooks/runner-pool.yml or
+#            playbooks/temporal.yml; allowed without a terminal, so an agent can run
 #            it unattended
 #
+# An existing TECHOPS_APPLY_KEY_FILE (default ~/.local/state/techops/ops-apply-key)
+# must be caller-owned with mode 600 and is used without an agent. Otherwise,
 # apply-scoped never uses the operator's agent. It starts its own
 # ssh-agent, with its socket in a fresh mode-700 directory, loads the ops
 # key into it with op read from a 1Password service account, points ssh
@@ -22,8 +24,8 @@
 # file and the key's vault, item and field come from
 # TECHOPS_APPLY_OP_TOKEN_FILE, TECHOPS_APPLY_OP_KEY_VAULT,
 # TECHOPS_APPLY_OP_KEY_ITEM and TECHOPS_APPLY_OP_KEY_FIELD in
-# mise.local.toml, and the mode refuses to start without every one. It
-# takes exactly one playbook short name, ssh or runner-pool, matched
+# mise.local.toml, and this fallback requires every one. The mode
+# takes exactly one playbook short name, ssh, runner-pool or temporal, matched
 # against a fixed list before any path is built, and of the
 # ansible-playbook options only --check, --diff and -v.
 #
@@ -45,7 +47,7 @@
 # Usage:
 #   ops-ansible.sh verify [ansible-playbook args...]
 #   ops-ansible.sh check|apply [playbook] [ansible-playbook args...]
-#   ops-ansible.sh apply-scoped ssh|runner-pool [--check] [--diff] [-v...]
+#   ops-ansible.sh apply-scoped ssh|runner-pool|temporal [--check] [--diff] [-v...]
 #
 # playbook names a file under infra/ansible/playbooks without .yml and
 # defaults to accounts.
@@ -53,7 +55,7 @@ set -euo pipefail
 
 usage() {
   echo "usage: ops-ansible.sh verify|check|apply [playbook] [ansible-playbook args...]" >&2
-  echo "       ops-ansible.sh apply-scoped ssh|runner-pool [--check] [--diff] [-v...]" >&2
+  echo "       ops-ansible.sh apply-scoped ssh|runner-pool|temporal [--check] [--diff] [-v...]" >&2
   exit 2
 }
 
@@ -74,32 +76,43 @@ if [[ $mode == apply ]]; then
   fi
 fi
 
-# The unattended mode runs one of two fixed playbooks, so nothing on its
+# The unattended mode runs one of three fixed playbooks, so nothing on its
 # command line may name another, add a variable or point at other code.
 # The name is matched as a whole word before it goes into any path.
 if [[ $mode == apply-scoped ]]; then
   case ${1:-} in
-  ssh | runner-pool) scoped_playbook=$1 ;;
+  ssh | runner-pool | temporal) scoped_playbook=$1 ;;
   *) usage ;;
   esac
   shift
   for arg in "$@"; do
     [[ $arg == --check || $arg == --diff || $arg =~ ^-v+$ ]] || usage
   done
-  for name in TECHOPS_APPLY_OP_TOKEN_FILE TECHOPS_APPLY_OP_KEY_VAULT TECHOPS_APPLY_OP_KEY_ITEM TECHOPS_APPLY_OP_KEY_FIELD; do
-    if [[ -z ${!name:-} ]]; then
-      echo "ops:$mode: $name is unset; set it in mise.local.toml" >&2
+  apply_key_file=${TECHOPS_APPLY_KEY_FILE:-$HOME/.local/state/techops/ops-apply-key}
+  file_provider=false
+  if [[ -e $apply_key_file || -L $apply_key_file ]]; then
+    apply_key_metadata=$(stat -Lc '%u:%a' -- "$apply_key_file" 2>/dev/null) || apply_key_metadata=
+    if [[ ! -f $apply_key_file || $apply_key_metadata != "$UID:600" ]]; then
+      echo "ops:$mode: apply key must be a regular file owned by the caller with mode 600" >&2
       exit 1
     fi
-  done
-  op_token_file=$TECHOPS_APPLY_OP_TOKEN_FILE
-  # shellcheck disable=SC2088 # matches the literal tilde TOML carries
-  if [[ $op_token_file == "~/"* ]]; then
-    op_token_file=$HOME/${op_token_file#"~/"}
-  fi
-  if [[ ! -f $op_token_file || ! -r $op_token_file ]]; then
-    echo "ops:$mode: the service-account token file TECHOPS_APPLY_OP_TOKEN_FILE names does not exist" >&2
-    exit 1
+    file_provider=true
+  else
+    for name in TECHOPS_APPLY_OP_TOKEN_FILE TECHOPS_APPLY_OP_KEY_VAULT TECHOPS_APPLY_OP_KEY_ITEM TECHOPS_APPLY_OP_KEY_FIELD; do
+      if [[ -z ${!name:-} ]]; then
+        echo "ops:$mode: $name is unset; set it in mise.local.toml" >&2
+        exit 1
+      fi
+    done
+    op_token_file=$TECHOPS_APPLY_OP_TOKEN_FILE
+    # shellcheck disable=SC2088 # matches the literal tilde TOML carries
+    if [[ $op_token_file == "~/"* ]]; then
+      op_token_file=$HOME/${op_token_file#"~/"}
+    fi
+    if [[ ! -f $op_token_file || ! -r $op_token_file ]]; then
+      echo "ops:$mode: the service-account token file TECHOPS_APPLY_OP_TOKEN_FILE names does not exist" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -151,23 +164,29 @@ ops-ro) ssh_args='-C -o StrictHostKeyChecking=yes -o ControlMaster=auto -o Contr
 ops) ssh_args='-C -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPersist=no -o ControlPath=none -o IdentitiesOnly=yes' ;;
 esac
 
-key=$(uv run --group ops ansible-inventory "${inventories[@]}" --list |
-  jq -r --arg u "$user" '[._meta.hostvars[] | .techops_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
-if [[ -z $key ]]; then
-  echo "ops:$mode: the private inventory has no single techops_ssh_key_files entry for $user" >&2
-  exit 1
-fi
-# shellcheck disable=SC2088 # matches the literal tilde YAML carries
-if [[ $key == "~/"* ]]; then
-  key=$HOME/${key#"~/"}
-fi
-if [[ ! -f $key ]]; then
-  echo "ops:$mode: the key file techops_ssh_key_files names for $user does not exist" >&2
-  exit 1
+if [[ $mode == apply-scoped && $file_provider == true ]]; then
+  key=$apply_key_file
+  ssh_args="$ssh_args -o IdentityAgent=none"
+  unset SSH_AUTH_SOCK SSH_AGENT_PID
+else
+  key=$(uv run --group ops ansible-inventory "${inventories[@]}" --list |
+    jq -r --arg u "$user" '[._meta.hostvars[] | .techops_ssh_key_files[$u]? // empty] | unique | if length == 1 then .[0] else empty end')
+  if [[ -z $key ]]; then
+    echo "ops:$mode: the private inventory has no single techops_ssh_key_files entry for $user" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC2088 # matches the literal tilde YAML carries
+  if [[ $key == "~/"* ]]; then
+    key=$HOME/${key#"~/"}
+  fi
+  if [[ ! -f $key ]]; then
+    echo "ops:$mode: the key file techops_ssh_key_files names for $user does not exist" >&2
+    exit 1
+  fi
 fi
 
 agent_dir=
-if [[ $mode == apply-scoped ]]; then
+if [[ $mode == apply-scoped && $file_provider == false ]]; then
   agent_dir=$(mktemp -d)
   chmod 700 "$agent_dir"
   agent_pid=

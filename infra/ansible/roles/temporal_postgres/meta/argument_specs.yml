@@ -1,0 +1,75 @@
+---
+argument_specs:
+  main:
+    short_description: Run Temporal's PostgreSQL on rootless Docker with local dumps
+    options:
+      temporal_postgres_major:
+        type: int
+        default: 16
+        choices: [16, 15]
+        description: PostgreSQL major version; changing it needs a fresh or migrated data directory.
+      temporal_postgres_images:
+        type: dict
+        description: Official PostgreSQL images pinned by digest, keyed by major version as a string.
+      temporal_network_name:
+        type: str
+        default: temporal
+        description: User-defined Docker network this role creates for the Temporal services.
+      temporal_postgres_data_dir:
+        type: path
+        default: /var/lib/temporal/postgres
+        description: Persistent data directory, mounted at the image's path for the selected major.
+      temporal_postgres_max_connections:
+        type: int
+        default: 100
+        description: Connection limit, at least 100.
+      temporal_postgres_dump_dir:
+        type: path
+        default: /var/lib/temporal/dumps
+        description: Local directory for plain SQL dumps of both databases.
+      temporal_postgres_dump_schedule:
+        type: str
+        default: daily
+        description: Calendar expression for the user dump timer.
+      temporal_postgres_dump_retention_days:
+        type: int
+        default: 14
+        description: Delete completed dumps older than this many days after a successful dump.
+      temporal_postgres_op_environment_file:
+        type: path
+        default: /etc/temporal-postgres/op.env
+        description: Operator-managed environment file outside the home with OP_SERVICE_ACCOUNT_TOKEN.
+      temporal_postgres_op_admin_password:
+        type: dict
+        required: true
+        options:
+          vault:
+            type: str
+            required: true
+            description: Vault containing the password item.
+          item:
+            type: str
+            required: true
+            description: Item containing the password field.
+          field:
+            type: str
+            required: true
+            description: Field holding the password.
+        description: 1Password reference for the postgres administrator's password, read at container start.
+      temporal_postgres_op_login_password:
+        type: dict
+        required: true
+        options:
+          vault:
+            type: str
+            required: true
+            description: Vault containing the password item.
+          item:
+            type: str
+            required: true
+            description: Item containing the password field.
+          field:
+            type: str
+            required: true
+            description: Field holding the password.
+        description: 1Password reference for the temporal login's password, read at container start.

@@ -18,3 +18,14 @@ actions_runner_pool_installation_id: 12345678
 actions_runner_pool_op_key_vault: example-vault
 actions_runner_pool_op_key_item: example-item
 actions_runner_pool_op_key_field: example-field
+# Syntax-check stand-ins; never contact a tailnet.
+temporal_frontend_service: svc:example-temporal
+temporal_ui_service: svc:example-temporal-ui
+temporal_postgres_op_admin_password:
+  vault: example-vault
+  item: example-admin
+  field: password
+temporal_postgres_op_login_password:
+  vault: example-vault
+  item: example-login
+  field: password

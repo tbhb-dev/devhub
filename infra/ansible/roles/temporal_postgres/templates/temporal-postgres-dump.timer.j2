@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Daily local dump of both Temporal databases
+
+[Timer]
+OnCalendar={{ temporal_postgres_dump_schedule }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

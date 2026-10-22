@@ -1,0 +1,17 @@
+---
+- name: Verify removal preserves state
+  hosts: all
+  become: true
+  vars_files:
+    - ../../../../playbooks/vars/temporal.yml
+  tasks:
+    - name: Check removed resources and retained data
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /opt/temporal-playbook-test/deployment.py
+          - after-remove
+          - "{{ temporal_network_name }}"
+          - "{{ temporal_deployment_units | join(',') }}"
+          - "{{ temporal_deployment_containers | join(',') }}"
+      changed_when: false

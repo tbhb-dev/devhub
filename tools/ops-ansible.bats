@@ -12,6 +12,7 @@ setup() {
   work=$(mktemp -d)
   stubs=$work/stubs
   mkdir -p "$stubs" "$work/private/ansible/inventory"
+  export TECHOPS_APPLY_KEY_FILE=$work/missing-key
   export CALLS=$work/calls
   : >"$CALLS"
   export OPS_KEY=$work/ops-key.pub
@@ -44,6 +45,7 @@ ansible-inventory)
 ansible-playbook)
   shift
   printf 'ansible-playbook %s\n' "$*" >>"$CALLS"
+  [ -n "${SSH_AUTH_SOCK:-}" ] || exit 0
   printf 'agent-dir-mode=%s\n' "$(stat -c %a "${SSH_AUTH_SOCK%/*}")" >>"$CALLS"
   ;;
 esac
@@ -97,7 +99,7 @@ run_pool() {
 }
 
 @test "apply refuses a playbook name without a terminal, the scoped ones included" {
-  for name in ssh runner-pool; do
+  for name in ssh runner-pool temporal; do
     run_pool bash "$script" apply "$name"
     [ "$status" -eq 1 ]
     [[ $output == *"no terminal"* ]]
@@ -130,8 +132,8 @@ run_pool() {
   [ ! -s "$CALLS" ]
 }
 
-@test "apply-scoped refuses any playbook name but ssh and runner-pool before an agent starts" {
-  for arg in site accounts verify playbooks/ssh.yml ../ssh ssh.yml '' --check; do
+@test "apply-scoped refuses any playbook name but ssh, runner-pool and temporal before an agent starts" {
+  for arg in site accounts verify temporal-remove playbooks/ssh.yml ../ssh ssh.yml '' --check; do
     run_pool bash "$script" apply-scoped "$arg"
     [ "$status" -eq 2 ]
     [[ $output == usage:* ]]
@@ -154,13 +156,15 @@ run_pool() {
   [ ! -s "$CALLS" ]
 }
 
-@test "apply-scoped runs either playbook without a terminal through its own agent, then kills it" {
-  for name in ssh runner-pool; do
+@test "apply-scoped runs each playbook without a terminal through its own agent, then kills it" {
+  for name in ssh runner-pool temporal; do
     : >"$CALLS"
     run_pool bash "$script" apply-scoped "$name" --check --diff -vv
     [ "$status" -eq 0 ]
     [[ $output != *"no terminal"* ]]
     [[ $output != *"operator-only"* ]]
+    [[ $output != *example-private-key* ]]
+    [[ $output != *example-service-account-token* ]]
 
     run grep '^ssh-agent -s ' "$CALLS"
     [ "${#lines[@]}" -eq 1 ]
@@ -184,4 +188,29 @@ run_pool() {
     grep -qxF 'ssh-agent -k pid=4242' "$CALLS"
     [ ! -e "${sock%/*}" ]
   done
+}
+
+@test "apply-scoped prefers the file provider without op settings or an agent" {
+  printf 'example-file-private-key\n' >"$work/apply-key"
+  chmod 600 "$work/apply-key"
+  run_pool TECHOPS_APPLY_KEY_FILE="$work/apply-key" TECHOPS_APPLY_OP_TOKEN_FILE= \
+    SSH_AUTH_SOCK="$work/operator.sock" bash "$script" apply-scoped temporal
+  [ "$status" -eq 0 ]
+  [[ $output != *example-file-private-key* ]]
+  [[ $output != *example-private-key* ]]
+  [[ $output != *example-service-account-token* ]]
+  ! grep -E '^(op |ssh-agent |ssh-add )' "$CALLS"
+  grep -F '"ansible_ssh_private_key_file":"'"$work/apply-key"'"' "$CALLS"
+  grep -F 'IdentitiesOnly=yes -o IdentityAgent=none' "$CALLS"
+}
+
+@test "apply-scoped refuses a file key with the wrong mode without exposing it" {
+  printf 'example-file-private-key\n' >"$work/apply-key"
+  chmod 644 "$work/apply-key"
+  run_pool TECHOPS_APPLY_KEY_FILE="$work/apply-key" bash "$script" apply-scoped temporal
+  [ "$status" -eq 1 ]
+  [[ $output == *"owned by the caller with mode 600"* ]]
+  [[ $output != *"$work"* ]]
+  [[ $output != *example-file-private-key* ]]
+  [ ! -s "$CALLS" ]
 }

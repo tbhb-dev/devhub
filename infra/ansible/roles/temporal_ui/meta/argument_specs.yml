@@ -1,0 +1,45 @@
+---
+argument_specs:
+  main:
+    short_description: Run the Temporal UI with mutual TLS and loopback access
+    options:
+      temporal_ui_version:
+        type: str
+        default: "2.48.0"
+        description: Independent UI release; check frontend compatibility through the namespace API.
+      temporal_ui_digest:
+        type: str
+        default: sha256:5bc8712de27029b64a9cad156221b082a43ae27bfb108fc1743076eaabf1437f
+        description: Public multi-platform image digest for the selected UI release.
+      temporal_ui_loopback_port:
+        type: int
+        default: 8080
+        description: Host port published only on IPv4 loopback.
+      temporal_ui_codec_endpoint:
+        type: str
+        default: ""
+        description: Optional codec endpoint; empty disables it.
+      temporal_ui_home:
+        type: path
+        default: /var/lib/temporal
+        description: Existing temporal service user home, provided by the database role.
+      temporal_ui_frontend_address:
+        type: str
+        default: temporal-server:7233
+        description: Frontend container DNS name and port on temporal_network_name.
+      temporal_ui_tls_server_name:
+        type: str
+        default: temporal.example.com
+        description: Name verified against the frontend certificate SAN.
+      temporal_ui_client_certificate_vault:
+        type: str
+        default: ""
+        description: Private inventory selector for the vault holding the client certificate item.
+      temporal_ui_client_certificate_item:
+        type: str
+        default: ""
+        description: Private inventory item with ca, certificate and private-key fields.
+      temporal_ui_op_token_file:
+        type: str
+        default: .config/op/service-account-token
+        description: Service account token path relative to the home; provisioned separately.

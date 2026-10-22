@@ -1,0 +1,40 @@
+---
+- name: Prepare disposable certificate fixtures
+  hosts: edge-1
+  become: true
+  tasks:
+    # Copied from temporal_server's prepare step, with no scenario imports.
+    - name: Install the fixture generator
+      ansible.builtin.copy:
+        src: create-certificates.sh
+        dest: /tmp/temporal-certificates.sh
+        mode: "0700"
+
+    - name: Generate the stand-in CAs and certificates
+      ansible.builtin.command:
+        cmd: /bin/bash /tmp/temporal-certificates.sh
+        creates: /run/temporal-fixtures/wrong.pem
+
+    - name: Install the scenario password manager stub
+      ansible.builtin.copy:
+        src: op
+        dest: /usr/local/bin/op
+        mode: "0755"
+
+    - name: Prepare the Temporal user's daemon
+      ansible.builtin.include_role:
+        name: docker_rootless
+      vars:
+        docker_rootless_subid_start: 655360
+
+    - name: Prepare the controller token fixture
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        content: molecule-host-token-stand-in
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/host-op-token"
+        mode: "0600"
+      no_log: true
+
+- name: Prepare deployment checks
+  ansible.builtin.import_playbook: temporal-prepare.yml

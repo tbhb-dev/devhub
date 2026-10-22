@@ -1,0 +1,15 @@
+---
+- name: Converge the previous minor for the upgrade test
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge the database and network first
+      ansible.builtin.include_role:
+        name: temporal_postgres
+    - name: Converge Temporal at the previous minor
+      ansible.builtin.include_role:
+        name: temporal_server
+      vars:
+        temporal_server_version: 1.31.1
+        temporal_server_digest: sha256:5728db90c9883f5b2a7b8ea0bcdfb84edbc9f6c14479cd3354957aa77d4b8bac
+        temporal_server_admin_tools_digest: sha256:0fa94393f6254dea05df1cdacb7a8ee95f6fb51a2ffbde0c6847a73037f788c7

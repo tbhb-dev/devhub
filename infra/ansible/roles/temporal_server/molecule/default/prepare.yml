@@ -1,0 +1,39 @@
+---
+- name: Prepare throwaway certificates
+  hosts: all
+  become: true
+  tasks:
+    # Only this local stub runs; no real credential store is accessed.
+    - name: Install the predecessor credential stub
+      ansible.builtin.copy:
+        dest: /usr/local/bin/op
+        content: |
+          #!/bin/sh
+          test "$1" = read || exit 1
+          scheme=op
+          case "$2" in
+            "$scheme://example-vault/example-admin/password"|"$scheme://example-vault/example-login/password")
+              cat /run/temporal-fixtures/password
+              ;;
+            *) exit 1 ;;
+          esac
+        mode: "0755"
+    - name: Create the fixture input directory
+      ansible.builtin.file:
+        path: /run/temporal-fixtures
+        state: directory
+        mode: "0755"
+    - name: Supply the password file independently of predecessor cleanup
+      ansible.builtin.copy:
+        dest: "{{ temporal_server_postgres_password_file }}"
+        content: "example-password\n"
+        mode: "0644"
+    - name: Install fixture generator
+      ansible.builtin.copy:
+        src: certificates.sh
+        dest: /tmp/temporal-certificates.sh
+        mode: "0700"
+    - name: Generate the two CAs and signed certificates
+      ansible.builtin.command: /bin/bash /tmp/temporal-certificates.sh
+      args:
+        creates: /run/temporal-fixtures/wrong.pem

@@ -1,0 +1,17 @@
+---
+- name: Assert previous schemas before upgrading
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the temporal account
+      ansible.builtin.getent:
+        database: passwd
+        key: temporal
+    - name: Assert the previous minor schema versions before the upgrade
+      ansible.builtin.include_tasks: tasks/schema.yml
+
+- name: Upgrade with the pinned matching tools before starting the new server
+  hosts: all
+  become: true
+  roles:
+    - role: temporal_server

@@ -1,0 +1,75 @@
+---
+# cspell:ignore libexec
+- name: Check the UI settings
+  ansible.builtin.assert:
+    that:
+      - temporal_ui_version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+      - temporal_ui_digest is match('^sha256:[0-9a-f]{64}$')
+      - temporal_ui_loopback_port >= 1024
+      - temporal_ui_loopback_port <= 65535
+      - temporal_network_name | default('') | length > 0
+      - temporal_ui_client_certificate_vault | length > 0
+      - temporal_ui_client_certificate_item | length > 0
+      - temporal_ui_op_token_file is not match('^/')
+      - "'..' not in temporal_ui_op_token_file.split('/')"
+    quiet: true
+
+- name: Look up the Temporal user
+  ansible.builtin.getent:
+    database: passwd
+    key: temporal
+
+- name: Record the Temporal user ID
+  ansible.builtin.set_fact:
+    temporal_ui_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
+
+- name: Install the UI as the Temporal user
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_ui_uid }}
+    DOCKER_HOST: unix:///run/user/{{ temporal_ui_uid }}/docker.sock
+  block:
+    - name: Require the database role's network
+      ansible.builtin.command:
+        argv: [docker, network, inspect, "{{ temporal_network_name }}"]
+      changed_when: false
+
+    - name: Create the UI directories
+      ansible.builtin.file:
+        path: "{{ temporal_ui_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [.local, .local/libexec, .config, .config/temporal-ui, .config/systemd, .config/systemd/user]
+
+    - name: Install the certificate loader
+      ansible.builtin.copy:
+        src: temporal-ui-certificates.sh
+        dest: "{{ temporal_ui_home }}/.local/libexec/temporal-ui-certificates"
+        mode: "0700"
+      notify: Restart the Temporal UI
+
+    - name: Install the UI environment
+      ansible.builtin.template:
+        src: ui.env.j2
+        dest: "{{ temporal_ui_home }}/.config/temporal-ui/ui.env"
+        mode: "0600"
+      notify: Restart the Temporal UI
+
+    - name: Install the UI unit
+      ansible.builtin.template:
+        src: temporal-ui.service.j2
+        dest: "{{ temporal_ui_home }}/.config/systemd/user/temporal-ui.service"
+        mode: "0644"
+      notify: Restart the Temporal UI
+
+    - name: Enable and start the UI
+      ansible.builtin.systemd_service:
+        name: temporal-ui.service
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+
+- name: Apply the UI handlers
+  ansible.builtin.meta: flush_handlers

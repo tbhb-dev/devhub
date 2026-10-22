@@ -1,0 +1,46 @@
+---
+- name: Reject a certificate from another CA and restore the valid client
+  hosts: edge-1
+  become: true
+  tasks:
+    - name: Exercise the wrong client certificate
+      block:
+        - name: Install the wrong client certificate
+          ansible.builtin.include_role:
+            name: temporal_ui
+          vars:
+            temporal_ui_client_certificate_item: wrong
+
+        # Settings needs no frontend; readiness here does not mask TLS errors.
+        - name: Wait for the UI HTTP server
+          ansible.builtin.uri:
+            url: http://127.0.0.1:{{ temporal_ui_loopback_port | default(8080) }}/api/v1/settings
+            use_proxy: false
+          register: temporal_ui_ready
+          until: temporal_ui_ready.status == 200
+          retries: 30
+          delay: 2
+
+        - name: Request namespaces using the untrusted client
+          ansible.builtin.uri:
+            url: http://127.0.0.1:{{ temporal_ui_loopback_port | default(8080) }}/api/v1/namespaces
+            use_proxy: false
+            return_content: true
+            status_code: [500, 502, 503, 504]
+          register: temporal_ui_rejected
+
+        - name: Check that the frontend rejected the certificate
+          ansible.builtin.assert:
+            that:
+              - temporal_ui_rejected.status >= 500
+              - temporal_ui_rejected.content is search('(?i)tls|certificate|handshake')
+      always:
+        - name: Restore the valid client certificate
+          ansible.builtin.include_role:
+            name: temporal_ui
+
+- name: Verify the running UI before removal
+  ansible.builtin.import_playbook: ui-verify.yml
+
+- name: Check and remove the deployment
+  ansible.builtin.import_playbook: temporal-side-effect.yml

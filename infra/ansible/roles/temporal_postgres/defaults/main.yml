@@ -1,0 +1,18 @@
+---
+# Shared contract with the other Temporal roles.
+temporal_network_name: temporal # noqa var-naming[no-role-prefix]
+temporal_postgres_major: 16
+# Official postgres:16 and postgres:15 image index digests.
+temporal_postgres_images:
+  # postgres:16
+  "16": postgres@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+  # postgres:15
+  "15": postgres@sha256:baa22e6286bf832cb147b8bb5aa9d8bc999846d69c21d11bf63f58fbeed1fa48
+temporal_postgres_data_dir: /var/lib/temporal/postgres
+temporal_postgres_max_connections: 100
+temporal_postgres_dump_dir: /var/lib/temporal/dumps
+temporal_postgres_dump_schedule: daily
+temporal_postgres_dump_retention_days: 14
+# The operator supplies the service-account environment outside the home.
+# Password item references have no defaults; private inventory sets them.
+temporal_postgres_op_environment_file: /etc/temporal-postgres/op.env

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# cspell:ignore noexec nosuid isready
+# {{ ansible_managed }}
+set -euo pipefail
+umask 077
+# Keep credentials out of core dumps, including those inherited by children.
+ulimit -c 0
+export DOCKER_HOST=unix:///run/user/{{ docker_rootless_uid }}/docker.sock
+docker rm -f temporal-postgres >/dev/null 2>&1 || true
+# Passwords arrive through stdin into tmpfs after the container starts.
+# No password is in Docker's configuration, the image or persistent files.
+docker run -d --name temporal-postgres --network {{ temporal_network_name | quote }} \
+  --tmpfs /run/secrets:rw,noexec,nosuid,size=1m \
+  --mount {{ ('type=bind,src=' ~ temporal_postgres_data_dir ~ ',dst=' ~ '/var/lib/postgresql/data') | quote }} \
+  --mount type=bind,src=/var/lib/temporal/.config/temporal-postgres/init.sh,dst=/docker-entrypoint-initdb.d/init.sh,readonly \
+  --env POSTGRES_PASSWORD_FILE=/run/secrets/admin-password \
+  --entrypoint /bin/bash {{ temporal_postgres_images[temporal_postgres_major | string] | quote }} \
+  -c 'until test -e /run/secrets/ready; do sleep 0.1; done; exec docker-entrypoint.sh postgres -c max_connections={{ temporal_postgres_max_connections }}' >/dev/null
+scheme=op
+admin_reference={{ (temporal_postgres_op_admin_password.vault ~ '/' ~ temporal_postgres_op_admin_password.item ~ '/' ~ temporal_postgres_op_admin_password.field) | quote }}
+login_reference={{ (temporal_postgres_op_login_password.vault ~ '/' ~ temporal_postgres_op_login_password.item ~ '/' ~ temporal_postgres_op_login_password.field) | quote }}
+timeout 30 op read "$scheme://$admin_reference" |
+  docker exec -i temporal-postgres sh -c 'umask 077; cat > /run/secrets/admin-password'
+timeout 30 op read "$scheme://$login_reference" |
+  docker exec -i temporal-postgres sh -c 'umask 077; cat > /run/secrets/login-password'
+docker exec temporal-postgres chmod 0444 /run/secrets/admin-password /run/secrets/login-password
+docker exec temporal-postgres touch /run/secrets/ready
+for _attempt in {1..120}; do
+  if docker exec temporal-postgres pg_isready -h 127.0.0.1 -U postgres >/dev/null; then
+    docker exec temporal-postgres rm /run/secrets/admin-password /run/secrets/login-password
+    systemd-notify --ready
+    exit_code=$(docker wait temporal-postgres)
+    exit "$exit_code"
+  fi
+  sleep 1
+done
+exit 1

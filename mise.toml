@@ -167,7 +167,7 @@ run = "bats tools/check-vendored.bats"
 
 [tasks.test-tools]
 description = "Test draft task failures, ops task refusals, and leak gate rules"
-run = "bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats tools/owner-paths.bats"
+run = "bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats tools/owner-paths.bats tools/temporal-playbook.bats"
 
 [tasks.test]
 description = "Run every test suite"

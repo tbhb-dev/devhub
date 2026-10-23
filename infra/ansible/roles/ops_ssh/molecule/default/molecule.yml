@@ -12,11 +12,9 @@ platforms:
     # The repo inventory's groups for edge-1, so the health playbook
     # sees the same memberships and group_vars under the suffixed name.
     groups: [hetzner_dedicated, tailnet]
-    # The driver tags the build molecule_local/<image>, so each scenario
-    # names its own. Dockerfile.j2 builds it from ubuntu:26.04.
-    image: techops-ops-ssh:ubuntu-26.04
-    dockerfile: Dockerfile.j2
-    pre_build_image: false
+    # The runner builds this content-addressed image when its cache is missing.
+    image: ${MOLECULE_IMAGE}
+    pre_build_image: true
     privileged: true
     command: /sbin/init
     cgroupns_mode: host

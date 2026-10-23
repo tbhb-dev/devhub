@@ -10,11 +10,9 @@ driver:
 platforms:
   # test-ansible sets MOLECULE_RUN_ID, so concurrent runs get distinct containers.
   - name: ops-accounts-ubuntu-2604-${MOLECULE_RUN_ID:-local}
-    # The driver tags the build molecule_local/<image>, so each scenario
-    # names its own. Dockerfile.j2 builds it from ubuntu:26.04.
-    image: techops-ops-accounts:ubuntu-26.04
-    dockerfile: Dockerfile.j2
-    pre_build_image: false
+    # The runner builds this content-addressed image when its cache is missing.
+    image: ${MOLECULE_IMAGE}
+    pre_build_image: true
 prerun: false
 provisioner:
   name: ansible

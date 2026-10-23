@@ -167,7 +167,10 @@ run = "bats tools/check-vendored.bats"
 
 [tasks.test-tools]
 description = "Test draft task failures, ops task refusals, and leak gate rules"
-run = "bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats tools/owner-paths.bats"
+run = [
+  "bats tools/fix-prose-replacements.bats tools/ops-ansible.bats tools/leak-patterns.bats tools/owner-paths.bats",
+  "uv run --group ops pytest tools",
+]
 
 [tasks.test]
 description = "Run every test suite"
@@ -177,7 +180,7 @@ run = [
   "mise run test-go",
   "mise run cover-go",
   "mise run test-py",
-  "mise run test-ansible",
+  "mise run test-ansible-selected",
 ]
 
 [tasks.check]
@@ -601,34 +604,28 @@ run = [
   "uv run --group ops ansible-playbook --syntax-check -i inventory -i tests/inventory playbooks/*.yml",
 ]
 
-# The bats file checks the ssh command line tools/ops-ansible.sh builds,
-# against a stub ssh; it lives here because it needs the uv ops group.
-# Each run takes MOLECULE_RUN_ID from its own mktemp directory, so no two
-# live runs under one TMPDIR share it, and every scenario appends it to its
-# platform name.
-# Molecule otherwise keeps each scenario's state, inventory and molecule.yml
-# in a cache directory every checkout shares, keyed by role and scenario
-# name, where another checkout's run could rewrite the platform list a
-# destroy reads.
+# Both paths keep the SSH option checks and run scenarios in sequence.
 [tasks.test-ansible]
-description = "Test the ops ssh options against a stub, then run the Molecule scenarios in Docker"
+description = "Run every Molecule scenario for CI and pre-deploy verification"
 depends = ["install-ansible"]
-dir = "{{config_root}}/infra/ansible"
-# Avoid the macOS fork-safety crash when Ansible workers look up system proxies.
-env = { LC_ALL = "C.UTF-8", ANSIBLE_COLLECTIONS_PATH = "{{config_root}}/infra/ansible/.collections", ANSIBLE_ROLES_PATH = "{{config_root}}/infra/ansible/roles", no_proxy = "*", NO_PROXY = "*" }
+env = { LC_ALL = "C.UTF-8" }
 run = [
-  "bats {{config_root}}/tools/ops-ansible-ssh.bats",
-  '''
-state=$(mktemp -d -t molecule-XXXXXXXX)
-trap 'rm -rf "$state"' EXIT
-MOLECULE_RUN_ID=${state##*-}
-export MOLECULE_RUN_ID
-for scenario in roles/*/molecule; do
-  role=${scenario%/molecule}
-  (cd "$role" && MOLECULE_EPHEMERAL_DIRECTORY="$state/${role#roles/}" uv run --group ops molecule test) || exit
-done
-''',
+  "bats tools/ops-ansible-ssh.bats",
+  "uv run --group ops python -m tools.gate_molecule --all",
 ]
+
+[tasks.test-ansible-selected]
+description = "Run the Molecule scenarios affected by the branch and working changes"
+depends = ["install-ansible"]
+env = { LC_ALL = "C.UTF-8" }
+run = [
+  "bats tools/ops-ansible-ssh.bats",
+  "uv run --group ops python -m tools.gate_molecule",
+]
+
+[tasks.check-commit]
+description = "Run lint, syntax checks, unit checks and affected Molecule scenarios"
+run = ["mise run lint", "mise run test"]
 
 # Extra invocation args reach ansible-playbook, e.g. `--limit edge-1`.
 # check and apply also take a playbook name first; see the script header.

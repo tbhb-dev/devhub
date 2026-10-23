@@ -1,0 +1,133 @@
+---
+- name: Check the PostgreSQL settings
+  ansible.builtin.assert:
+    that:
+      - temporal_postgres_max_connections >= 100
+      - temporal_postgres_images[temporal_postgres_major | string] is match('^[^@\s]+@sha256:[0-9a-f]{64}$')
+      - temporal_network_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+    quiet: true
+
+- name: Set up the Temporal user's rootless daemon
+  ansible.builtin.include_role:
+    name: docker_rootless
+  vars:
+    docker_rootless_user: temporal
+    docker_rootless_home: /var/lib/temporal
+    docker_rootless_data_size: ""
+    # A different range from the runner pool on the same host.
+    docker_rootless_subid_start: 655360
+
+- name: Create the host credential directory
+  ansible.builtin.file:
+    path: /etc/temporal-host
+    state: directory
+    owner: temporal
+    group: temporal
+    mode: "0700"
+
+- name: Generate each database password only when absent
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      umask 077
+      head -c 36 /dev/urandom | base64 | tr -d '\n/+=' > /etc/temporal-host/{{ item }}
+    executable: /bin/bash
+    creates: /etc/temporal-host/{{ item }}
+  loop: [postgres-admin-password, postgres-password]
+  no_log: true
+
+- name: Protect the database password files
+  ansible.builtin.file:
+    path: /etc/temporal-host/{{ item }}
+    owner: temporal
+    group: temporal
+    mode: "0400"
+  loop: [postgres-admin-password, postgres-password]
+  no_log: true
+
+# Nothing under the home is written as root, including Ansible's copies.
+- name: Install PostgreSQL as the Temporal user
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ docker_rootless_uid }}
+    DOCKER_HOST: unix:///run/user/{{ docker_rootless_uid }}/docker.sock
+  block:
+    - name: Create the PostgreSQL directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - /var/lib/temporal/.local/bin
+        - /var/lib/temporal/.config/temporal-postgres
+
+    - name: Create the PostgreSQL data mount
+      ansible.builtin.file:
+        path: "{{ temporal_postgres_data_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Inspect the Temporal network
+      ansible.builtin.command:
+        argv: [docker, network, inspect, "{{ temporal_network_name }}"]
+      register: temporal_postgres_network
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Create the Temporal network when absent
+      ansible.builtin.command:
+        argv: [docker, network, create, "{{ temporal_network_name }}"]
+      when: temporal_postgres_network.rc != 0
+      changed_when: true
+
+    - name: Inspect the pinned PostgreSQL image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ temporal_postgres_images[temporal_postgres_major | string] }}"]
+      register: temporal_postgres_image
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Pull the pinned PostgreSQL image when absent
+      ansible.builtin.command:
+        argv: [docker, pull, "{{ temporal_postgres_images[temporal_postgres_major | string] }}"]
+      when: temporal_postgres_image.rc != 0
+      changed_when: true
+
+    - name: Install the database initialization script
+      ansible.builtin.copy:
+        src: init.sh
+        dest: /var/lib/temporal/.config/temporal-postgres/init.sh
+        mode: "0644"
+      notify: Restart Temporal PostgreSQL
+
+    - name: Install the PostgreSQL scripts
+      ansible.builtin.template:
+        src: "{{ item }}.sh.j2"
+        dest: /var/lib/temporal/.local/bin/temporal-postgres-{{ item }}
+        mode: "0700"
+      loop: [start]
+      diff: false
+      notify: Restart Temporal PostgreSQL
+
+    - name: Install the PostgreSQL units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: /var/lib/temporal/.config/systemd/user/{{ item }}
+        mode: "0644"
+      loop: [temporal-postgres.service]
+      notify:
+        - Restart Temporal PostgreSQL
+
+    - name: Enable and start PostgreSQL
+      ansible.builtin.systemd_service:
+        name: temporal-postgres.service
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+
+- name: Apply the PostgreSQL handlers
+  ansible.builtin.meta: flush_handlers

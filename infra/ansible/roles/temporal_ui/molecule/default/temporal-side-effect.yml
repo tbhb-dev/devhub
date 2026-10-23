@@ -1,0 +1,14 @@
+---
+- name: Check deployment exposure and isolation
+  hosts: all
+  become: true
+  tasks:
+    - name: Check listeners and cross-daemon isolation
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /opt/temporal-playbook-test/deployment.py
+          - deployment
+          - "{{ temporal_frontend_service }}"
+          - "{{ temporal_ui_service }}"
+      changed_when: false

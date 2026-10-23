@@ -18,3 +18,6 @@ actions_runner_pool_installation_id: 12345678
 actions_runner_pool_op_key_vault: example-vault
 actions_runner_pool_op_key_item: example-item
 actions_runner_pool_op_key_field: example-field
+# Syntax-check stand-ins; never contact a tailnet.
+temporal_frontend_service: svc:example-temporal
+temporal_ui_service: svc:example-temporal-ui

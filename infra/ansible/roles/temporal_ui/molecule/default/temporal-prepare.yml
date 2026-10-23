@@ -1,0 +1,65 @@
+---
+# cspell:ignore tailscaled
+# Import after the UI scenario's own CA and credential preparation.
+- name: Prepare the deployment acceptance checks
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the probe daemon
+      ansible.builtin.include_role:
+        name: docker_rootless
+      vars:
+        docker_rootless_user: temporal-probe
+        docker_rootless_home: /var/lib/temporal-probe
+        docker_rootless_subid_start: 786432
+        docker_rootless_data_image: /var/lib/temporal-probe-docker-data.img
+        docker_rootless_data_size: ""
+
+    - name: Create the test state directory
+      ansible.builtin.file:
+        path: /opt/temporal-playbook-test
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the deployment acceptance helper
+      ansible.builtin.copy:
+        src: deployment.py
+        dest: /opt/temporal-playbook-test/deployment.py
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the hand deployment specification fixtures
+      ansible.builtin.copy:
+        src: spec.json
+        dest: /opt/temporal-playbook-test/spec.json
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the Tailscale recorder
+      ansible.builtin.copy:
+        src: tailscale.sh
+        dest: /usr/local/bin/tailscale
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install a stand-in tailscaled service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/tailscaled.service
+        content: |
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          RemainAfterExit=yes
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Record the existing listeners
+      ansible.builtin.command:
+        cmd: python3 /opt/temporal-playbook-test/deployment.py baseline
+      changed_when: false

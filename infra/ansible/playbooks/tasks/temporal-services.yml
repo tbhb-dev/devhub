@@ -1,0 +1,24 @@
+---
+- name: Install the tailnet service units
+  ansible.builtin.template:
+    src: temporal-{{ item }}-tailnet.service.j2
+    dest: /etc/systemd/system/temporal-{{ item }}-tailnet.service
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [frontend, ui]
+  register: temporal_deployment_service_files
+
+- name: Enable the frontend tailnet service first
+  ansible.builtin.systemd_service:
+    name: temporal-frontend-tailnet.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if temporal_deployment_service_files.results[0].changed else 'started' }}"
+
+- name: Enable the UI tailnet service after the frontend
+  ansible.builtin.systemd_service:
+    name: temporal-ui-tailnet.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if temporal_deployment_service_files.results[1].changed else 'started' }}"

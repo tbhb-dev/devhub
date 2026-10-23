@@ -1,0 +1,17 @@
+---
+temporal_server_version: 1.32.0
+temporal_server_digest: sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae
+temporal_server_admin_tools_version: "{{ temporal_server_version }}"
+temporal_server_admin_tools_digest: sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+# Fixed container and login names supplied by temporal_postgres.
+temporal_server_postgres_host: temporal-postgres
+temporal_server_postgres_user: temporal
+temporal_server_frontend_port: 7233
+temporal_server_tls_server_name: temporal-server
+# Files already provisioned on the managed host; never vault references here.
+temporal_server_postgres_password_file: /etc/temporal-host/postgres-password
+temporal_server_certificates:
+  - {name: ca, cert_file: /etc/temporal-host/ca.pem}
+  - {name: server, cert_file: /etc/temporal-host/server.pem, key_file: /etc/temporal-host/server.key}
+  - {name: client, cert_file: /etc/temporal-host/client.pem, key_file: /etc/temporal-host/client.key}
+temporal_server_dynamic_config: {}

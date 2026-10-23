@@ -1,0 +1,11 @@
+---
+- name: Restart the Temporal UI
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_ui_uid }}
+  ansible.builtin.systemd_service:
+    name: temporal-ui.service
+    scope: user
+    daemon_reload: true
+    state: restarted

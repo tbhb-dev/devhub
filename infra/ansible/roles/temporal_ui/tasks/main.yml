@@ -1,0 +1,99 @@
+---
+- name: Check the UI settings
+  ansible.builtin.assert:
+    that:
+      - temporal_ui_version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+      - temporal_ui_digest is match('^sha256:[0-9a-f]{64}$')
+      - temporal_ui_loopback_port >= 1024
+      - temporal_ui_loopback_port <= 65535
+      - temporal_network_name | default('') | length > 0
+    quiet: true
+
+- name: Look up the Temporal user
+  ansible.builtin.getent:
+    database: passwd
+    key: temporal
+
+- name: Record the Temporal user ID
+  ansible.builtin.set_fact:
+    temporal_ui_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
+
+- name: Inspect the provisioned certificates
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+    get_mime: false
+  loop:
+    - /var/lib/temporal/.config/temporal-ui/tls/ca.pem
+    - /var/lib/temporal/.config/temporal-ui/tls/certificate.pem
+    - /var/lib/temporal/.config/temporal-ui/tls/private-key.pem
+  register: temporal_ui_certificate_files
+
+- name: Require certificates provisioned out of band
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.pw_name | default('') == 'temporal'
+      - item.stat.gr_name | default('') == 'temporal'
+      - item.stat.mode | default('') == '0400'
+    fail_msg: Certificates must be provisioned out of band, owned by temporal with mode 0400.
+    quiet: true
+  loop: "{{ temporal_ui_certificate_files.results }}"
+
+- name: Install the UI as the Temporal user
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_ui_uid }}
+    DOCKER_HOST: unix:///run/user/{{ temporal_ui_uid }}/docker.sock
+  block:
+    - name: Require the database role's network
+      ansible.builtin.command:
+        argv: [docker, network, inspect, "{{ temporal_network_name }}"]
+      changed_when: false
+
+    - name: Create the UI directories
+      ansible.builtin.file:
+        path: "{{ temporal_ui_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [.config, .config/temporal-ui, .config/systemd, .config/systemd/user]
+
+    - name: Inspect the pinned UI image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "temporalio/ui:{{ temporal_ui_version }}@{{ temporal_ui_digest }}"]
+      register: temporal_ui_image
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Pull the pinned UI image when absent
+      ansible.builtin.command:
+        argv: [docker, pull, "temporalio/ui:{{ temporal_ui_version }}@{{ temporal_ui_digest }}"]
+      when: temporal_ui_image.rc != 0
+      changed_when: true
+
+    - name: Install the UI environment
+      ansible.builtin.template:
+        src: ui.env.j2
+        dest: "{{ temporal_ui_home }}/.config/temporal-ui/ui.env"
+        mode: "0600"
+      notify: Restart the Temporal UI
+
+    - name: Install the UI unit
+      ansible.builtin.template:
+        src: temporal-ui.service.j2
+        dest: "{{ temporal_ui_home }}/.config/systemd/user/temporal-ui.service"
+        mode: "0644"
+      notify: Restart the Temporal UI
+
+    - name: Enable and start the UI
+      ansible.builtin.systemd_service:
+        name: temporal-ui.service
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started
+
+- name: Apply the UI handlers
+  ansible.builtin.meta: flush_handlers

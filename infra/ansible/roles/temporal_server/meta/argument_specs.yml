@@ -1,0 +1,62 @@
+---
+argument_specs:
+  main:
+    short_description: Run Temporal with schema migrations and mutual TLS
+    options:
+      temporal_server_version:
+        type: str
+        description: Temporal release; 1.31.1 is supported only for the upgrade fixture.
+        default: 1.32.0
+      temporal_server_digest:
+        type: str
+        description: Public multi-architecture server image digest.
+      temporal_server_admin_tools_version:
+        type: str
+        description: Release matching the server release.
+      temporal_server_admin_tools_digest:
+        type: str
+        description: Public matching admin-tools image digest.
+      temporal_server_postgres_host:
+        type: str
+        description: PostgreSQL container DNS name on temporal_network_name.
+        default: temporal-postgres
+      temporal_server_postgres_user:
+        type: str
+        description: Login with schema ownership in both Temporal databases.
+        default: temporal
+      temporal_server_postgres_password_file:
+        type: path
+        description: Host-generated database login password file outside the home.
+        default: /etc/temporal-host/postgres-password
+      temporal_server_frontend_port:
+        type: int
+        description: Host loopback frontend port.
+        default: 7233
+      temporal_server_tls_server_name:
+        type: str
+        description: DNS subject alternative name on the server certificate.
+        default: temporal-server
+      temporal_server_dynamic_config:
+        type: dict
+        description: Mounted dynamic configuration without history or rate limit overrides.
+      temporal_server_certificates:
+        type: list
+        description: CA, server and client files already provisioned on the managed host.
+        elements: dict
+        options:
+          name:
+            type: str
+            description: Name.
+            required: true
+            choices: [ca, server, client]
+          cert_file:
+            type: path
+            description: Cert file.
+            required: true
+          key_file:
+            type: path
+            description: Key file.
+      temporal_network_name:
+        type: str
+        required: true
+        description: Existing network owned by temporal_postgres.

@@ -1,0 +1,42 @@
+---
+- name: Prepare disposable certificate fixtures
+  hosts: all
+  become: true
+  tasks:
+    - name: Prepare the Temporal user's daemon
+      ansible.builtin.include_role:
+        name: docker_rootless
+      vars:
+        docker_rootless_user: temporal
+        docker_rootless_home: /var/lib/temporal
+        docker_rootless_subid_start: 655360
+        docker_rootless_data_size: ""
+
+    - name: Install the fixture generator
+      ansible.builtin.copy:
+        src: certificates.sh
+        dest: /tmp/temporal-certificates.sh
+        mode: "0700"
+
+    - name: Generate the disposable CAs and certificates
+      ansible.builtin.command:
+        cmd: /bin/bash /tmp/temporal-certificates.sh
+        creates: /run/temporal-fixtures/wrong.pem
+
+    - name: Create the out of band certificate directory
+      ansible.builtin.file:
+        path: /etc/temporal-host
+        state: directory
+        owner: temporal
+        group: temporal
+        mode: "0700"
+
+    - name: Provision the server certificate inputs out of band
+      ansible.builtin.copy:
+        src: /run/temporal-fixtures/{{ item }}
+        dest: /etc/temporal-host/{{ item }}
+        remote_src: true
+        owner: temporal
+        group: temporal
+        mode: "0400"
+      loop: [ca.pem, server.pem, server.key, client.pem, client.key]

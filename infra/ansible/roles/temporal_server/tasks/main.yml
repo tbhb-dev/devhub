@@ -1,0 +1,146 @@
+---
+- name: Validate the server contract
+  ansible.builtin.assert:
+    that:
+      - temporal_network_name is defined
+      - temporal_server_postgres_host is defined
+      - temporal_server_postgres_user is defined
+      - temporal_server_postgres_password_file is defined
+      - temporal_server_admin_tools_version == temporal_server_version
+      - temporal_server_digest is match('^sha256:[0-9a-f]{64}$')
+      - temporal_server_admin_tools_digest is match('^sha256:[0-9a-f]{64}$')
+      - temporal_server_version is version('1.31.0', '>=')
+      - temporal_server_certificates | map(attribute='name') | sort == ['ca', 'client', 'server']
+    quiet: true
+
+- name: Reject throughput and history limit overrides
+  ansible.builtin.assert:
+    that:
+      - item is not match('^limit\.history(Size|Count)')
+      - item is not match('^(matching|frontend)\..*[Rr][Pp][Ss]')
+      - item is not match('^(matching|frontend)\..*[Rr]ate')
+    quiet: true
+  loop: "{{ temporal_server_dynamic_config.keys() | list }}"
+
+- name: Install certificate and runtime tools
+  ansible.builtin.apt:
+    name: [openssl, python3, slirp4netns]
+    state: present
+    install_recommends: false
+
+- name: Look up the temporal account supplied by temporal_postgres
+  ansible.builtin.getent:
+    database: passwd
+    key: temporal
+
+- name: Record the temporal runtime paths
+  ansible.builtin.set_fact:
+    temporal_server_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
+    temporal_server_home: "{{ ansible_facts.getent_passwd.temporal[4] }}"
+
+- name: Inspect the provisioned certificates
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+    get_mime: false
+  loop: >-
+    {{ (temporal_server_certificates | map(attribute='cert_file') | list) +
+       (temporal_server_certificates | selectattr('key_file', 'defined') | map(attribute='key_file') | list) }}
+  register: temporal_server_certificate_files
+
+- name: Require certificates provisioned out of band
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.pw_name | default('') == 'temporal'
+      - item.stat.gr_name | default('') == 'temporal'
+      - item.stat.mode | default('') == '0400'
+    fail_msg: Certificates must be provisioned out of band, owned by temporal with mode 0400.
+    quiet: true
+  loop: "{{ temporal_server_certificate_files.results }}"
+
+- name: Install and start as temporal
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_server_uid }}
+    DOCKER_HOST: unix:///run/user/{{ temporal_server_uid }}/docker.sock
+  block:
+    - name: Require the predecessor's network
+      ansible.builtin.command: docker network inspect {{ temporal_network_name }}
+      changed_when: false
+
+    - name: Create user owned directories
+      ansible.builtin.file:
+        path: "{{ temporal_server_home }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - .config/temporal-server
+        - .config/temporal-server/tls
+        - .config/systemd/user
+        - .config/systemd/user/docker.service.d
+        - .local/bin
+
+    # pasta's implicit forwarding exposes listeners on every host interface.
+    - name: Require explicit port forwarding for the Temporal daemon
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns
+          Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=builtin
+        dest: "{{ temporal_server_home }}/.config/systemd/user/docker.service.d/temporal-server.conf"
+        mode: "0600"
+      notify:
+        - Restart Temporal Docker networking
+        - Restart Temporal server
+
+    - name: Install the CA and leaf certificates
+      ansible.builtin.copy:
+        src: "{{ item.cert_file }}"
+        dest: "{{ temporal_server_home }}/.config/temporal-server/tls/{{ item.name }}.pem"
+        remote_src: true
+        mode: "0600"
+      loop: "{{ temporal_server_certificates }}"
+      no_log: true
+      notify: Restart Temporal server
+
+    - name: Install the leaf keys
+      ansible.builtin.copy:
+        src: "{{ item.key_file }}"
+        dest: "{{ temporal_server_home }}/.config/temporal-server/tls/{{ item.name }}.key"
+        remote_src: true
+        mode: "0600"
+      loop: "{{ temporal_server_certificates }}"
+      when: item.name != 'ca'
+      no_log: true
+      notify: Restart Temporal server
+
+    - name: Render the server configuration and runtime scripts
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ temporal_server_home }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: config.yml.j2, dest: .config/temporal-server/config.yml, mode: "0600"}
+        - {src: temporal-server-start.sh.j2, dest: .local/bin/temporal-server-start, mode: "0700"}
+        - {src: temporal-server.service.j2, dest: .config/systemd/user/temporal-server.service, mode: "0600"}
+      notify: Restart Temporal server
+
+    - name: Mount the dynamic configuration without default limit overrides
+      ansible.builtin.copy:
+        content: "{{ temporal_server_dynamic_config | to_nice_yaml }}"
+        dest: "{{ temporal_server_home }}/.config/temporal-server/dynamic.yml"
+        mode: "0600"
+      notify: Restart Temporal server
+
+    - name: Apply the server handlers before startup
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start Temporal
+      ansible.builtin.systemd_service:
+        name: temporal-server.service
+        scope: user
+        daemon_reload: true
+        enabled: true
+        state: started

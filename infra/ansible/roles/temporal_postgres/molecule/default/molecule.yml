@@ -1,0 +1,44 @@
+---
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: edge-1-${MOLECULE_RUN_ID:-local}
+    image: techops-temporal-postgres:ubuntu-26.04
+    dockerfile: Dockerfile.j2
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    cgroupns_mode: private
+    # Nested Docker's overlayfs cannot stack on the platform's overlayfs.
+    volumes:
+      - /var/lib/temporal
+    keep_volumes: false
+    tmpfs:
+      - /run
+      - /tmp
+prerun: false
+provisioner:
+  name: ansible
+  connection_options:
+    ansible_connection: community.docker.docker_api
+  inventory:
+    group_vars:
+      all:
+        ansible_user: ops
+        docker_rootless_data_size: ""
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy

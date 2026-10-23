@@ -1,0 +1,14 @@
+---
+- name: Verify deployment files match the hand specification
+  hosts: all
+  become: true
+  tasks:
+    - name: Check file contents and metadata
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /opt/temporal-playbook-test/deployment.py
+          - files
+          - "{{ temporal_frontend_service }}"
+          - "{{ temporal_ui_service }}"
+      changed_when: false

@@ -1,0 +1,44 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+config="$HOME/.config/temporal-server"
+runtime="$XDG_RUNTIME_DIR/temporal-server"
+password_file={{ temporal_server_postgres_password_file | quote }}
+admin='{{ temporal_server_admin_image }}'
+server='{{ temporal_server_image }}'
+network={{ temporal_network_name | quote }}
+postgres_host={{ temporal_server_postgres_host | quote }}
+postgres_user={{ temporal_server_postgres_user | quote }}
+docker image inspect "$admin" >/dev/null 2>&1 || docker pull "$admin"
+docker image inspect "$server" >/dev/null 2>&1 || docker pull "$server"
+for database in temporal temporal_visibility; do
+  schema=temporal
+  if [[ $database == temporal_visibility ]]; then schema=visibility; fi
+  migration=$(cat "$password_file" | docker run --rm -i --user 0 --network "$network" \
+    --entrypoint /bin/sh "$admin" -ec '
+      SQL_PASSWORD=$(cat)
+      export SQL_PASSWORD
+      temporal-sql-tool --plugin postgres12 --ep "$1" -p 5432 -u "$2" --db "$3" setup-schema -v 0.0
+      temporal-sql-tool --plugin postgres12 --ep "$1" -p 5432 -u "$2" --db "$3" update-schema -d "/etc/temporal/schema/postgresql/v12/$4/versioned"
+      expected=$(find "/etc/temporal/schema/postgresql/v12/$4/versioned" -mindepth 1 -maxdepth 1 -type d | sed '"'"'s|.*/v||'"'"' | sort -V | tail -n 1)
+      printf "expected-schema=%s\n" "$expected"
+    ' sh "$postgres_host" "$postgres_user" "$database" "$schema")
+  expected=$(printf "%s\n" "$migration" | sed -n "s/^expected-schema=//p")
+  actual=$(docker exec temporal-postgres psql -U "$postgres_user" -d "$database" -Atc "SELECT curr_version FROM schema_version")
+  test "$actual" = "$expected"
+done
+echo 'Temporal schema migrations complete; starting server {{ temporal_server_version }}'
+python3 - "$config/config.yml" "$password_file" "$runtime/docker.yaml" <<'PYTHON'
+import json
+import pathlib
+import sys
+source, secret, target = map(pathlib.Path, sys.argv[1:])
+target.write_text(source.read_text().replace('"__RUNTIME_PASSWORD__"', json.dumps(secret.read_text().rstrip("\n"))))
+PYTHON
+exec docker run --rm --name temporal-server --user 0 --network "$network" \
+  --publish 127.0.0.1:{{ temporal_server_frontend_port }}:7233 \
+  --mount "type=bind,src=$runtime,dst=/runtime,readonly" \
+  --mount "type=bind,src=$config/tls,dst=/tls,readonly" \
+  --mount "type=bind,src=$config/dynamic.yml,dst=/dynamic.yml,readonly" \
+  --entrypoint temporal-server "$server" --root / --config runtime --env docker start \
+  --service frontend --service history --service matching --service worker

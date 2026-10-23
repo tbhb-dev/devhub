@@ -1,0 +1,13 @@
+[Unit]
+Description=Temporal UI on the tailnet (HTTPS 443)
+Requires=tailscaled.service
+After=tailscaled.service network-online.target temporal-frontend-tailnet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/env tailscale serve --bg --service={{ temporal_ui_service }} --https=443 http://127.0.0.1:8080
+ExecStop=/usr/bin/env tailscale serve --service={{ temporal_ui_service }} --https=443 off
+
+[Install]
+WantedBy=multi-user.target

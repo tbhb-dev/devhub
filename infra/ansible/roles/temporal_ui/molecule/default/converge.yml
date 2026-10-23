@@ -1,0 +1,3 @@
+---
+- name: Converge Temporal through its deployment playbook
+  ansible.builtin.import_playbook: ../../../../playbooks/temporal.yml

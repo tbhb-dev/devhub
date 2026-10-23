@@ -1,0 +1,12 @@
+---
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Install the acceptance helper
+      ansible.builtin.copy:
+        src: acceptance.py
+        dest: /tmp/temporal-postgres-acceptance.py
+        owner: root
+        group: root
+        mode: "0755"

@@ -1,0 +1,19 @@
+[Unit]
+Description=Temporal web UI
+Requires=docker.service
+After=docker.service
+
+[Service]
+Environment=DOCKER_HOST=unix://%t/docker.sock
+EnvironmentFile=%h/.config/temporal-ui/ui.env
+ExecStartPre=-/usr/bin/docker rm -f temporal-ui
+ExecStart=/usr/bin/docker run --rm --name temporal-ui --user 0:0 --network {{ temporal_network_name }} --publish 127.0.0.1:{{ temporal_ui_loopback_port }}:8080 --mount type=bind,src=%h/.config/temporal-ui/tls,dst=/run/temporal-ui,readonly --env TEMPORAL_ADDRESS --env TEMPORAL_TLS_SERVER_NAME --env TEMPORAL_TLS_ENABLE_HOST_VERIFICATION --env TEMPORAL_TLS_CA --env TEMPORAL_TLS_CERT --env TEMPORAL_TLS_KEY --env TEMPORAL_DISABLE_WRITE_ACTIONS temporalio/ui:{{ temporal_ui_version }}@{{ temporal_ui_digest }}
+ExecStop=/usr/bin/docker stop temporal-ui
+ExecStopPost=-/usr/bin/docker rm -f temporal-ui
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300s
+TimeoutStopSec=60s
+
+[Install]
+WantedBy=default.target

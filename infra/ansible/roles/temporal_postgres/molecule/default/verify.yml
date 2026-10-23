@@ -1,0 +1,26 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the Temporal user
+      ansible.builtin.getent:
+        database: passwd
+        key: temporal
+
+    - name: Verify PostgreSQL 15 and unchanged passwords
+      become: true
+      become_user: temporal
+      environment:
+        XDG_RUNTIME_DIR: /run/user/{{ ansible_facts.getent_passwd.temporal[1] }}
+        DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd.temporal[1] }}/docker.sock
+      ansible.builtin.command:
+        argv: [python3, /tmp/temporal-postgres-acceptance.py, verify]
+      changed_when: false
+
+    # Root can read subordinate-ID-owned data and the daemon's storage too.
+    - name: Verify the home contains no secret and no root-owned file
+      ansible.builtin.command:
+        argv: [python3, /tmp/temporal-postgres-acceptance.py, home]
+      changed_when: false

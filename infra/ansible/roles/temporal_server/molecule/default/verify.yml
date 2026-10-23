@@ -1,0 +1,39 @@
+---
+- name: Verify Temporal acceptance criteria
+  hosts: all
+  become: true
+  vars_files:
+    - ../../defaults/main.yml
+    - ../../vars/main.yml
+  tasks:
+    - name: Look up temporal
+      ansible.builtin.getent:
+        database: passwd
+        key: temporal
+    - name: Check the final schema versions
+      ansible.builtin.include_tasks: tasks/schema.yml
+    - name: Install the acceptance probe
+      ansible.builtin.copy:
+        src: verify.py
+        dest: /tmp/temporal-verify.py
+        mode: "0755"
+    - name: Build the disposable TLS probe with Python
+      become: true
+      become_user: temporal
+      environment:
+        DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd.temporal[1] }}/docker.sock
+      ansible.builtin.command:
+        argv: [docker, build, --tag, temporal-server-probe, '-']
+        stdin: |
+          FROM {{ temporal_server_admin_image }}
+          USER root
+          RUN apk add --no-cache python3
+      changed_when: false
+    - name: Verify health, process, TLS, configuration, ports and certificates
+      become: true
+      become_user: temporal
+      environment:
+        DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd.temporal[1] }}/docker.sock
+        XDG_RUNTIME_DIR: /run/user/{{ ansible_facts.getent_passwd.temporal[1] }}
+      ansible.builtin.command: python3 /tmp/temporal-verify.py
+      changed_when: false

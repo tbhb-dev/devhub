@@ -1,0 +1,28 @@
+---
+# Requires= stops the dependent services when Docker restarts; start PostgreSQL
+# again before the server's migration and readiness checks.
+- name: Restart Temporal Docker networking
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_server_uid }}
+  ansible.builtin.systemd_service:
+    name: "{{ item.name }}"
+    scope: user
+    daemon_reload: true
+    state: "{{ item.state }}"
+  loop:
+    - {name: temporal-server.service, state: stopped}
+    - {name: docker.service, state: restarted}
+    - {name: temporal-postgres.service, state: restarted}
+
+- name: Restart Temporal server
+  become: true
+  become_user: temporal
+  environment:
+    XDG_RUNTIME_DIR: /run/user/{{ temporal_server_uid }}
+  ansible.builtin.systemd_service:
+    name: temporal-server.service
+    scope: user
+    daemon_reload: true
+    state: restarted

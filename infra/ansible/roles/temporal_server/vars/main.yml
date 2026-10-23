@@ -1,0 +1,4 @@
+---
+temporal_server_image: temporalio/server:{{ temporal_server_version }}@{{ temporal_server_digest }}
+temporal_server_admin_image: >-
+  temporalio/admin-tools:{{ temporal_server_admin_tools_version }}@{{ temporal_server_admin_tools_digest }}

@@ -3,3 +3,7 @@
 # or a path on the operator's workstation belongs in the private inventory.
 verify_os_distribution: Ubuntu
 verify_os_version: "26.04"
+# Temporal roles publish only on loopback; private inventory supplies Services.
+temporal_network_name: temporal
+temporal_server_frontend_port: 7233
+temporal_ui_loopback_port: 8080

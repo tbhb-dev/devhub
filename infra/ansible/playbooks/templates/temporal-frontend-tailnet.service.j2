@@ -1,0 +1,13 @@
+[Unit]
+Description=Temporal frontend on the tailnet (TCP passthrough)
+Requires=tailscaled.service
+After=tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/env tailscale serve --bg --service={{ temporal_frontend_service }} --tcp=7233 tcp://127.0.0.1:7233
+ExecStop=/usr/bin/env tailscale serve --service={{ temporal_frontend_service }} --tcp=7233 off
+
+[Install]
+WantedBy=multi-user.target

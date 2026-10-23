@@ -1,0 +1,25 @@
+---
+# 1.31.1 and 1.32.0 ship the same schema versions, independently of release numbers.
+- name: Read each schema version
+  become: true
+  become_user: temporal
+  environment:
+    DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd.temporal[1] }}/docker.sock
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - temporal-postgres
+      - psql
+      - -U
+      - temporal
+      - -d
+      - "{{ item.database }}"
+      - -Atc
+      - SELECT curr_version FROM schema_version
+  loop:
+    - {database: temporal, version: '1.19'}
+    - {database: temporal_visibility, version: '1.14'}
+  register: temporal_server_schema
+  changed_when: false
+  failed_when: temporal_server_schema.rc != 0 or temporal_server_schema.stdout != item.version

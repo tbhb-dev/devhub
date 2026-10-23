@@ -327,11 +327,16 @@ class Cell:
     lock: threading.Lock = field(default_factory=threading.Lock)
     started: threading.Event = field(default_factory=threading.Event)
 
-    def record(self, kind: str, **detail: object) -> None:
+    def record(self, kind: str, **detail: object) -> Record:
+        entry: Record = {
+            "t": time.monotonic(),
+            "wall": time.time(),
+            "kind": kind,
+            **detail,
+        }
         with self.lock:
-            self.records.append(
-                {"t": time.monotonic(), "wall": time.time(), "kind": kind, **detail}
-            )
+            self.records.append(entry)
+        return entry
 
     def at_anchor(self, point: str) -> None:
         if self.signal and point == self.anchor:
@@ -431,17 +436,20 @@ class Handler(BaseHTTPRequestHandler):
                 "expires_at": "2099-01-01T00:00:00Z",
             }
             cell.record("minted", token=minted)
-        # The answer as the client saw it: none once its --max-time passed.
-        try:
-            self.reply(status, payload, headers)
-        except OSError:
-            status = None
-        cell.record(
+        # The answer as the client saw it: none once its --max-time passed. The
+        # record goes in before the reply, because the slot can exit and the
+        # harness read the records as soon as the client has the answer.
+        answer = cell.record(
             "answer",
             call=call,
             token=token,
             status=None if spec == "timeout" else status,
         )
+        try:
+            self.reply(status, payload, headers)
+        except OSError:
+            with cell.lock:
+                answer["status"] = None
 
     @staticmethod
     def resolve(cell: Cell, call: str, spec: str, query: str) -> Answer:

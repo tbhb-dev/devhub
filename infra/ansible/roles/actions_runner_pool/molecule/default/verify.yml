@@ -1368,6 +1368,21 @@
             port: 18090
             timeout: 30
 
+        # Detached containers may still be starting. Retry readiness only, before the isolation probes.
+        - name: Wait for each slot's listener from the daemon's namespace
+          ansible.builtin.shell:
+            cmd: >-
+              nsenter --target "$(cat /run/user/{{ actions_runner_pool_uid }}/dockerd-rootless/child_pid)" --net
+              python3 -c 'import socket, sys;
+              socket.create_connection((sys.argv[1], 8080), timeout=1).close()'
+              {{ item }}
+          loop: "{{ actions_runner_pool_listeners.stdout_lines }}"
+          register: actions_runner_pool_listener_ready
+          until: actions_runner_pool_listener_ready.rc == 0
+          retries: 30
+          delay: 1
+          changed_when: false
+
         # The daemon's own namespace reaches both, so a failed probe below is the isolation.
         - name: Fetch each slot's listener from the daemon's namespace
           ansible.builtin.shell:

@@ -314,6 +314,37 @@ def test_ac1_resolvectl_status(
             "eth0",
             {"/etc/netplan": "not readable by ops-ro"},
         ),
+        (
+            {
+                "verify_networkd_contents": {
+                    "results": [
+                        {
+                            "failed": True,
+                            "msg": (
+                                "file not found: "
+                                "/run/systemd/network/10-netplan-eth0.network"
+                            ),
+                            "item": "/run/systemd/network/10-netplan-eth0.network",
+                        },
+                        {
+                            "source": (
+                                "/etc/systemd/network/"
+                                "10-netplan-eth0.network.d/override.conf"
+                            ),
+                            "content": b64("[DHCPv4]\nUseDNS=false\n"),
+                        },
+                    ]
+                },
+            },
+            {
+                "/etc/systemd/network/10-netplan-eth0.network.d/override.conf": (
+                    "[DHCPv4]\nUseDNS=false\n"
+                ),
+                "/run/systemd/network/10-netplan-eth0.network": "unreadable",
+            },
+            "eth0",
+            {"/etc/netplan/50-cloud-init.yaml": "not readable by ops-ro"},
+        ),
     ],
 )
 def test_ac2_networkd_and_netplan(
@@ -409,6 +440,28 @@ def test_ac3_port_853_probes(
             "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n",
             {},
             False,
+        ),
+        (
+            [
+                {
+                    "failed": True,
+                    "msg": (
+                        "Permission denied: /etc/nftables.d/actions-runner-egress.nft"
+                    ),
+                    "item": "/etc/nftables.d/actions-runner-egress.nft",
+                },
+                {
+                    "source": "/etc/nftables.d/techops-ssh.nft",
+                    "content": b64("table inet techops_ssh {}\n"),
+                },
+            ],
+            "active",
+            "udp LISTEN 0 0 127.0.0.53%lo:53 0.0.0.0:*\n",
+            {
+                "/etc/nftables.d/actions-runner-egress.nft": "unreadable",
+                "/etc/nftables.d/techops-ssh.nft": "table inet techops_ssh {}\n",
+            },
+            True,
         ),
     ],
 )

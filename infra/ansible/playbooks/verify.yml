@@ -339,10 +339,18 @@
         verify_networkd_map: >-
           {%- set ns = namespace(files={}) -%}
           {%- set items = verify_networkd_contents.results | default([])
+             | selectattr('source', 'defined')
+             | selectattr('content', 'defined')
              | sort(attribute='source', case_sensitive=true) -%}
           {%- for entry in items -%}
-            {%- if entry.content is defined and entry.source is defined -%}
-              {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+            {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+          {%- endfor -%}
+          {%- for entry in verify_networkd_contents.results | default([]) -%}
+            {%- if entry.source is not defined or entry.content is not defined -%}
+              {%- set path = entry.source | default(entry.item | default('')) -%}
+              {%- if path | length > 0 -%}
+                {%- set ns.files = ns.files | combine({path: 'unreadable'}) -%}
+              {%- endif -%}
             {%- endif -%}
           {%- endfor -%}
           {{ ns.files }}
@@ -363,10 +371,18 @@
         verify_nftables_map: >-
           {%- set ns = namespace(files={}) -%}
           {%- set items = verify_nftables_contents.results | default([])
+             | selectattr('source', 'defined')
+             | selectattr('content', 'defined')
              | sort(attribute='source', case_sensitive=true) -%}
           {%- for entry in items -%}
-            {%- if entry.content is defined and entry.source is defined -%}
-              {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+            {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+          {%- endfor -%}
+          {%- for entry in verify_nftables_contents.results | default([]) -%}
+            {%- if entry.source is not defined or entry.content is not defined -%}
+              {%- set path = entry.source | default(entry.item | default('')) -%}
+              {%- if path | length > 0 -%}
+                {%- set ns.files = ns.files | combine({path: 'unreadable'}) -%}
+              {%- endif -%}
             {%- endif -%}
           {%- endfor -%}
           {{ ns.files }}

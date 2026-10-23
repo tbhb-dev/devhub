@@ -153,6 +153,116 @@
       changed_when: false
       failed_when: false
 
+    - name: Read the resolver status
+      ansible.builtin.command:
+        cmd: resolvectl status --no-pager
+      register: verify_resolvectl
+      environment:
+        LC_ALL: C
+      changed_when: false
+      failed_when: false
+
+    - name: List network links
+      ansible.builtin.command:
+        cmd: networkctl list --no-pager --no-legend
+      register: verify_networkctl_list
+      environment:
+        LC_ALL: C
+      changed_when: false
+      failed_when: false
+
+    - name: Read the uplink network status
+      vars:
+        verify_network_links: >-
+          {{ (verify_networkctl_list.stdout | default('')
+              | regex_findall('(?m)^[ \t]*\d+[ \t]+([^\s]+)')
+              + (verify_resolvectl.stdout | default('')
+                 | regex_findall('(?m)^Link[ \t]+\d+[ \t]+\(([^)]+)\)')))
+             | unique | reject('in', ['lo', 'tailscale0']) | list }}
+        verify_uplink_name: "{{ verify_network_links | first | default('') }}"
+      ansible.builtin.command:
+        argv:
+          - networkctl
+          - status
+          - --no-pager
+          - "{{ verify_uplink_name }}"
+      register: verify_networkctl_uplink
+      environment:
+        LC_ALL: C
+      when: verify_uplink_name | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: List the systemd-networkd configuration files
+      ansible.builtin.find:
+        paths:
+          - /run/systemd/network
+          - /etc/systemd/network
+        recurse: true
+        file_type: file
+      register: verify_networkd_files
+      failed_when: false
+
+    - name: Read every systemd-networkd configuration file
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop: "{{ verify_networkd_files.files | default([]) | map(attribute='path') | sort(case_sensitive=true) | list }}"
+      register: verify_networkd_contents
+      failed_when: false
+
+    - name: List the netplan configuration files
+      ansible.builtin.find:
+        paths: /etc/netplan
+        patterns:
+          - "*.yaml"
+          - "*.yml"
+        file_type: any
+      register: verify_netplan_files
+      failed_when: false
+
+    - name: Probe outbound TCP port 853 to public resolvers
+      ansible.builtin.wait_for:
+        host: "{{ item }}"
+        port: 853
+        state: started
+        timeout: 2
+        connect_timeout: 2
+        sleep: 2
+      loop:
+        - 1.1.1.1
+        - 1.0.0.1
+        - 9.9.9.9
+      register: verify_dot_probes
+      failed_when: false
+
+    - name: List the rendered nftables drop-in files
+      ansible.builtin.find:
+        paths: /etc/nftables.d
+        file_type: file
+      register: verify_nftables_files
+      failed_when: false
+
+    - name: Read every rendered nftables drop-in file
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop: "{{ verify_nftables_files.files | default([]) | map(attribute='path') | sort(case_sensitive=true) | list }}"
+      register: verify_nftables_contents
+      failed_when: false
+
+    - name: Read the runner egress firewall state
+      ansible.builtin.command: # noqa: command-instead-of-module
+        cmd: systemctl is-active actions-runner-egress.service
+      register: verify_egress_firewall_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read the resolver stub listeners
+      ansible.builtin.command:
+        cmd: ss --no-header --listening --numeric --tcp --udp
+      register: verify_stub_listener
+      changed_when: false
+      failed_when: false
+
     - name: Evaluate the checks
       vars:
         verify_ssh_text: "{{ verify_ssh_drop_in.content | default('') | b64decode }}"
@@ -183,6 +293,86 @@
           {{ (verify_apt_upgrade.stdout
               | regex_findall('deferred due to phasing:\n((?:  .*\n?)+)') + [''])
              | first | split | list }}
+        verify_resolvectl_text: "{{ verify_resolvectl.stdout | default('') }}"
+        verify_resolvectl_dns_re: >-
+          (?m)^[ \t]*DNS Servers:[ \t]*([^\n]*(?:\n(?![ \t]*[A-Za-z][A-Za-z0-9 _.+-]*:(?:[ \t]|$))[ \t]+[^\n]*)*)
+        verify_resolvectl_domain_re: >-
+          (?m)^[ \t]*(?:DNS )?Domains?:[ \t]*([^\n]*(?:\n(?![ \t]*[A-Za-z][A-Za-z0-9 _.+-]*:(?:[ \t]|$))[ \t]+[^\n]*)*)
+        verify_resolvectl_dot_re: >-
+          {{ '(?im)(?:^[ \t]*DNSOverTLS(?:[ \t]+setting)?:[ \t]*|(?:^|[ \t])DNSOverTLS=)'
+             ~ '(yes|no|opportunistic)(?=[ \t\r\n]|$)' }}
+        verify_resolvectl_global_body: >-
+          {{ (verify_resolvectl_text
+              | regex_findall('(?ms)^Global[ \t]*\n(.*?)(?=^Link[ \t]+\d+[ \t]+\(|\Z)')
+              + ['']) | first }}
+        verify_resolvectl_global_dns: >-
+          {{ (verify_resolvectl_global_body
+              | regex_findall(verify_resolvectl_dns_re)
+              + ['']) | first | split | list }}
+        verify_resolvectl_global_domains: >-
+          {{ (verify_resolvectl_global_body
+              | regex_findall(verify_resolvectl_domain_re)
+              + ['']) | first | split | list }}
+        verify_resolvectl_link_sections: >-
+          {{ verify_resolvectl_text
+             | regex_findall('(?ms)^Link[ \t]+\d+[ \t]+\(([^)]+)\)[ \t]*\n(.*?)(?=^Link[ \t]+\d+[ \t]+\(|\Z)') }}
+        verify_resolver_links: >-
+          {%- set ns = namespace(links={}) -%}
+          {%- for pair in verify_resolvectl_link_sections -%}
+            {%- set name = pair[0] -%}
+            {%- set body = pair[1] -%}
+            {%- set dns = (body | regex_findall(verify_resolvectl_dns_re) + ['']) | first | split | list -%}
+            {%- set domains = (body | regex_findall(verify_resolvectl_domain_re) + ['']) | first | split | list -%}
+            {%- set dot_kv = (body | regex_findall(verify_resolvectl_dot_re) + ['']) | first | lower -%}
+            {%- set dot = dot_kv if dot_kv else (
+              'yes' if (body | regex_search('(?:^|[ \t])\\+DNSOverTLS(?=[ \t\r\n]|$)') is not none) else (
+              'no' if (body | regex_search('(?:^|[ \t])-DNSOverTLS(?=[ \t\r\n]|$)') is not none) else '')) -%}
+            {%- set entry = {'dns_servers': dns, 'domains': domains, 'dns_over_tls': dot} -%}
+            {%- set ns.links = ns.links | combine({name: entry}) -%}
+          {%- endfor -%}
+          {{ ns.links }}
+        verify_network_links: >-
+          {{ (verify_networkctl_list.stdout | default('')
+              | regex_findall('(?m)^[ \t]*\d+[ \t]+([^\s]+)')
+              + (verify_resolvectl_link_sections | map('first') | list))
+             | unique | reject('in', ['lo', 'tailscale0']) | list }}
+        verify_networkd_map: >-
+          {%- set ns = namespace(files={}) -%}
+          {%- set items = verify_networkd_contents.results | default([])
+             | sort(attribute='source', case_sensitive=true) -%}
+          {%- for entry in items -%}
+            {%- if entry.content is defined and entry.source is defined -%}
+              {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.files }}
+        verify_netplan_map: >-
+          {%- set ns = namespace(files={}) -%}
+          {%- for entry in verify_netplan_files.files | default([]) | sort(attribute='path', case_sensitive=true) -%}
+            {%- set ns.files = ns.files | combine({
+              entry.path: 'readable' if (entry.roth | default(false)) else 'not readable by ops-ro'}) -%}
+          {%- endfor -%}
+          {{ ns.files if ns.files | length > 0 else {'/etc/netplan': 'not readable by ops-ro'} }}
+        verify_dot_probe_map: >-
+          {%- set ns = namespace(probes={}) -%}
+          {%- for entry in verify_dot_probes.results | default([]) -%}
+            {%- set ok = (entry.state | default('')) == 'started' and not (entry.failed | default(false)) -%}
+            {%- set ns.probes = ns.probes | combine({entry.item: ok}) -%}
+          {%- endfor -%}
+          {{ ns.probes }}
+        verify_nftables_map: >-
+          {%- set ns = namespace(files={}) -%}
+          {%- set items = verify_nftables_contents.results | default([])
+             | sort(attribute='source', case_sensitive=true) -%}
+          {%- for entry in items -%}
+            {%- if entry.content is defined and entry.source is defined -%}
+              {%- set ns.files = ns.files | combine({entry.source: entry.content | b64decode}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.files }}
+        verify_stub_listening: >-
+          {{ (verify_stub_listener.stdout | default('')
+              | regex_search('(?:^|\s)127\.0\.0\.53(?:%[^\s:]+)?:53(?:\s|$)')) is not none }}
       ansible.builtin.set_fact:
         verify_report:
           os_release: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
@@ -207,6 +397,19 @@
           nftables_active: "{{ verify_nftables_active.stdout }}"
           nftables_override: "{{ verify_nftables_override.content | default('') | b64decode }}"
           ssh_revert_timers: "{{ verify_ssh_revert.stdout_lines }}"
+          resolver_global_dns_servers: "{{ verify_resolvectl_global_dns }}"
+          resolver_global_domains: "{{ verify_resolvectl_global_domains }}"
+          resolver_links: "{{ verify_resolver_links }}"
+          tailscale0_claims_default_route: >-
+            {{ '~.' in (verify_resolver_links.get('tailscale0', {}).get('domains', [])) }}
+          networkd_files: "{{ verify_networkd_map }}"
+          uplink_link: "{{ verify_network_links | first | default('') }}"
+          networkctl_uplink_status: "{{ verify_networkctl_uplink.stdout_lines | default([]) }}"
+          netplan_files: "{{ verify_netplan_map }}"
+          dot_port_853: "{{ verify_dot_probe_map }}"
+          egress_nftables_files: "{{ verify_nftables_map }}"
+          egress_firewall_active: "{{ verify_egress_firewall_active.stdout | default('') }}"
+          resolver_stub_listening: "{{ verify_stub_listening }}"
         verify_regressions: >-
           {{ (
             ([] if ansible_facts.distribution == verify_os_distribution

@@ -138,6 +138,9 @@ lineinfile
 losetup
 mainpid
 mountpoint
+netplan
+networkctl
+networkd
 nofile
 noheadings
 nologin
@@ -151,6 +154,7 @@ pkey
 pkeyopt
 pubout
 rejectattr
+resolvectl
 returncode
 rfile
 rootlesskit

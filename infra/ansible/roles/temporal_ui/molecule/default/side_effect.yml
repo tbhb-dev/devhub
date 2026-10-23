@@ -1,15 +1,91 @@
 ---
+- name: Provision a namespace fixture independently of deployment
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the Temporal user
+      ansible.builtin.getent:
+        database: passwd
+        key: temporal
+
+    - name: Create the disposable namespace through the frontend
+      become: true
+      become_user: temporal
+      environment:
+        DOCKER_HOST: unix:///run/user/{{ ansible_facts.getent_passwd.temporal[1] }}/docker.sock
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network
+          - container:temporal-server
+          - --user
+          - "0"
+          - --mount
+          - type=bind,src=/var/lib/temporal/.config/temporal-server/tls,dst=/tls,readonly
+          - --entrypoint
+          - temporal
+          - temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+          - --address
+          - 127.0.0.1:7233
+          - --tls-ca-path
+          - /tls/ca.pem
+          - --tls-cert-path
+          - /tls/client.pem
+          - --tls-key-path
+          - /tls/client.key
+          - --tls-server-name
+          - temporal-server
+          - operator
+          - namespace
+          - create
+          - --namespace
+          - coord
+          - --retention
+          - 30d
+      register: temporal_ui_namespace_fixture
+      until: temporal_ui_namespace_fixture.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: true
+
 - name: Reject a certificate from another CA and restore the valid client
   hosts: edge-1
   become: true
   tasks:
+    - name: Read the Temporal user
+      ansible.builtin.getent:
+        database: passwd
+        key: temporal
+
+    - name: Record the Temporal user ID
+      ansible.builtin.set_fact:
+        temporal_ui_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
+
     - name: Exercise the wrong client certificate
       block:
-        - name: Install the wrong client certificate
-          ansible.builtin.include_role:
-            name: temporal_ui
-          vars:
-            temporal_ui_client_certificate_item: wrong
+        - name: Install the wrong client certificate out of band
+          ansible.builtin.copy:
+            src: /run/temporal-fixtures/wrong.{{ item.src }}
+            dest: /var/lib/temporal/.config/temporal-ui/tls/{{ item.dest }}
+            remote_src: true
+            owner: temporal
+            group: temporal
+            mode: "0400"
+          loop:
+            - {src: pem, dest: certificate.pem}
+            - {src: key, dest: private-key.pem}
+
+        - name: Restart the UI with the untrusted client
+          become: true
+          become_user: temporal
+          environment:
+            XDG_RUNTIME_DIR: /run/user/{{ temporal_ui_uid }}
+          ansible.builtin.systemd_service:
+            name: temporal-ui.service
+            scope: user
+            state: restarted
 
         # Settings needs no frontend; readiness here does not mask TLS errors.
         - name: Wait for the UI HTTP server
@@ -35,12 +111,30 @@
               - temporal_ui_rejected.status >= 500
               - temporal_ui_rejected.content is search('(?i)tls|certificate|handshake')
       always:
-        - name: Restore the valid client certificate
-          ansible.builtin.include_role:
-            name: temporal_ui
+        - name: Restore the valid client certificate out of band
+          ansible.builtin.copy:
+            src: /run/temporal-fixtures/client.{{ item.src }}
+            dest: /var/lib/temporal/.config/temporal-ui/tls/{{ item.dest }}
+            remote_src: true
+            owner: temporal
+            group: temporal
+            mode: "0400"
+          loop:
+            - {src: pem, dest: certificate.pem}
+            - {src: key, dest: private-key.pem}
 
-- name: Verify the running UI before removal
+        - name: Restart the UI with the valid client
+          become: true
+          become_user: temporal
+          environment:
+            XDG_RUNTIME_DIR: /run/user/{{ temporal_ui_uid }}
+          ansible.builtin.systemd_service:
+            name: temporal-ui.service
+            scope: user
+            state: restarted
+
+- name: Verify the running UI
   ansible.builtin.import_playbook: ui-verify.yml
 
-- name: Check and remove the deployment
+- name: Check deployment isolation
   ansible.builtin.import_playbook: temporal-side-effect.yml

@@ -1,5 +1,4 @@
 ---
-# cspell:ignore libexec
 - name: Check the UI settings
   ansible.builtin.assert:
     that:
@@ -8,10 +7,6 @@
       - temporal_ui_loopback_port >= 1024
       - temporal_ui_loopback_port <= 65535
       - temporal_network_name | default('') | length > 0
-      - temporal_ui_client_certificate_vault | length > 0
-      - temporal_ui_client_certificate_item | length > 0
-      - temporal_ui_op_token_file is not match('^/')
-      - "'..' not in temporal_ui_op_token_file.split('/')"
     quiet: true
 
 - name: Look up the Temporal user
@@ -22,6 +17,28 @@
 - name: Record the Temporal user ID
   ansible.builtin.set_fact:
     temporal_ui_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
+
+- name: Inspect the provisioned certificates
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+    get_mime: false
+  loop:
+    - /var/lib/temporal/.config/temporal-ui/tls/ca.pem
+    - /var/lib/temporal/.config/temporal-ui/tls/certificate.pem
+    - /var/lib/temporal/.config/temporal-ui/tls/private-key.pem
+  register: temporal_ui_certificate_files
+
+- name: Require certificates provisioned out of band
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.pw_name | default('') == 'temporal'
+      - item.stat.gr_name | default('') == 'temporal'
+      - item.stat.mode | default('') == '0400'
+    fail_msg: Certificates must be provisioned out of band, owned by temporal with mode 0400.
+    quiet: true
+  loop: "{{ temporal_ui_certificate_files.results }}"
 
 - name: Install the UI as the Temporal user
   become: true
@@ -40,14 +57,21 @@
         path: "{{ temporal_ui_home }}/{{ item }}"
         state: directory
         mode: "0700"
-      loop: [.local, .local/libexec, .config, .config/temporal-ui, .config/systemd, .config/systemd/user]
+      loop: [.config, .config/temporal-ui, .config/systemd, .config/systemd/user]
 
-    - name: Install the certificate loader
-      ansible.builtin.copy:
-        src: temporal-ui-certificates.sh
-        dest: "{{ temporal_ui_home }}/.local/libexec/temporal-ui-certificates"
-        mode: "0700"
-      notify: Restart the Temporal UI
+    - name: Inspect the pinned UI image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "temporalio/ui:{{ temporal_ui_version }}@{{ temporal_ui_digest }}"]
+      register: temporal_ui_image
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Pull the pinned UI image when absent
+      ansible.builtin.command:
+        argv: [docker, pull, "temporalio/ui:{{ temporal_ui_version }}@{{ temporal_ui_digest }}"]
+      when: temporal_ui_image.rc != 0
+      changed_when: true
 
     - name: Install the UI environment
       ansible.builtin.template:

@@ -1,7 +1,7 @@
 ---
 argument_specs:
   main:
-    short_description: Run Temporal's PostgreSQL on rootless Docker with local dumps
+    short_description: Run Temporal's PostgreSQL on rootless Docker
     options:
       temporal_postgres_major:
         type: int
@@ -23,53 +23,3 @@ argument_specs:
         type: int
         default: 100
         description: Connection limit, at least 100.
-      temporal_postgres_dump_dir:
-        type: path
-        default: /var/lib/temporal/dumps
-        description: Local directory for plain SQL dumps of both databases.
-      temporal_postgres_dump_schedule:
-        type: str
-        default: daily
-        description: Calendar expression for the user dump timer.
-      temporal_postgres_dump_retention_days:
-        type: int
-        default: 14
-        description: Delete completed dumps older than this many days after a successful dump.
-      temporal_postgres_op_environment_file:
-        type: path
-        default: /etc/temporal-postgres/op.env
-        description: Operator-managed environment file outside the home with OP_SERVICE_ACCOUNT_TOKEN.
-      temporal_postgres_op_admin_password:
-        type: dict
-        required: true
-        options:
-          vault:
-            type: str
-            required: true
-            description: Vault containing the password item.
-          item:
-            type: str
-            required: true
-            description: Item containing the password field.
-          field:
-            type: str
-            required: true
-            description: Field holding the password.
-        description: 1Password reference for the postgres administrator's password, read at container start.
-      temporal_postgres_op_login_password:
-        type: dict
-        required: true
-        options:
-          vault:
-            type: str
-            required: true
-            description: Vault containing the password item.
-          item:
-            type: str
-            required: true
-            description: Item containing the password field.
-          field:
-            type: str
-            required: true
-            description: Field holding the password.
-        description: 1Password reference for the temporal login's password, read at container start.

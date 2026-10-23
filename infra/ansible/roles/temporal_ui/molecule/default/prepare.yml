@@ -1,40 +1,82 @@
 ---
 - name: Prepare disposable certificate fixtures
-  hosts: edge-1
+  hosts: all
   become: true
   tasks:
-    # Copied from temporal_server's prepare step, with no scenario imports.
+    - name: Prepare the Temporal user's daemon
+      ansible.builtin.include_role:
+        name: docker_rootless
+      vars:
+        docker_rootless_user: temporal
+        docker_rootless_home: /var/lib/temporal
+        docker_rootless_subid_start: 655360
+        docker_rootless_data_size: ""
+
+    - name: Exercise the missing certificate prerequisite
+      block:
+        - name: Check absent certificate inputs
+          ansible.builtin.import_tasks: ../../../../playbooks/tasks/temporal-credentials.yml
+      rescue:
+        - name: Record the expected certificate assertion
+          ansible.builtin.set_fact:
+            temporal_ui_missing_certificates_rejected: >-
+              {{ ansible_failed_task.name == 'Require certificates provisioned out of band' }}
+
+    - name: Require rejection before any server can start
+      ansible.builtin.assert:
+        that: temporal_ui_missing_certificates_rejected | default(false)
+        quiet: true
+
     - name: Install the fixture generator
       ansible.builtin.copy:
         src: create-certificates.sh
         dest: /tmp/temporal-certificates.sh
         mode: "0700"
 
-    - name: Generate the stand-in CAs and certificates
+    - name: Generate the disposable CAs and certificates
       ansible.builtin.command:
         cmd: /bin/bash /tmp/temporal-certificates.sh
         creates: /run/temporal-fixtures/wrong.pem
 
-    - name: Install the scenario password manager stub
-      ansible.builtin.copy:
-        src: op
-        dest: /usr/local/bin/op
-        mode: "0755"
+    - name: Create the out of band certificate directory
+      ansible.builtin.file:
+        path: /etc/temporal-host
+        state: directory
+        owner: temporal
+        group: temporal
+        mode: "0700"
 
-    - name: Prepare the Temporal user's daemon
-      ansible.builtin.include_role:
-        name: docker_rootless
-      vars:
-        docker_rootless_subid_start: 655360
-
-    - name: Prepare the controller token fixture
-      delegate_to: localhost
-      become: false
+    - name: Provision the server certificate inputs out of band
       ansible.builtin.copy:
-        content: molecule-host-token-stand-in
-        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/host-op-token"
-        mode: "0600"
-      no_log: true
+        src: /run/temporal-fixtures/{{ item }}
+        dest: /etc/temporal-host/{{ item }}
+        remote_src: true
+        owner: temporal
+        group: temporal
+        mode: "0400"
+      loop: [ca.pem, server.pem, server.key, client.pem, client.key]
+
+    - name: Create the UI certificate directories
+      ansible.builtin.file:
+        path: /var/lib/temporal/{{ item }}
+        state: directory
+        owner: temporal
+        group: temporal
+        mode: "0700"
+      loop: [.config/temporal-ui, .config/temporal-ui/tls]
+
+    - name: Provision the UI certificate inputs out of band
+      ansible.builtin.copy:
+        src: /run/temporal-fixtures/{{ item.src }}
+        dest: /var/lib/temporal/.config/temporal-ui/tls/{{ item.dest }}
+        remote_src: true
+        owner: temporal
+        group: temporal
+        mode: "0400"
+      loop:
+        - {src: ca.pem, dest: ca.pem}
+        - {src: client.pem, dest: certificate.pem}
+        - {src: client.key, dest: private-key.pem}
 
 - name: Prepare deployment checks
   ansible.builtin.import_playbook: temporal-prepare.yml

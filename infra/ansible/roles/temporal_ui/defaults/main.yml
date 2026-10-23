@@ -2,12 +2,7 @@
 temporal_ui_version: "2.48.0"
 temporal_ui_digest: sha256:5bc8712de27029b64a9cad156221b082a43ae27bfb108fc1743076eaabf1437f
 temporal_ui_loopback_port: 8080
-temporal_ui_codec_endpoint: ""
 # The database role creates this user's daemon and the network.
 temporal_ui_home: /var/lib/temporal
 temporal_ui_frontend_address: temporal-server:7233
-temporal_ui_tls_server_name: temporal.example.com
-# Item selectors are supplied by private inventory, never public references.
-temporal_ui_client_certificate_vault: ""
-temporal_ui_client_certificate_item: ""
-temporal_ui_op_token_file: .config/op/service-account-token
+temporal_ui_tls_server_name: temporal-server

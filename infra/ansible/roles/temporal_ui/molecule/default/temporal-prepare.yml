@@ -31,6 +31,14 @@
         group: root
         mode: "0755"
 
+    - name: Install the hand deployment specification fixtures
+      ansible.builtin.copy:
+        src: spec.json
+        dest: /opt/temporal-playbook-test/spec.json
+        owner: root
+        group: root
+        mode: "0644"
+
     - name: Install the Tailscale recorder
       ansible.builtin.copy:
         src: tailscale.sh

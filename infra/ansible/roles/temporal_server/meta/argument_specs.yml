@@ -26,20 +26,16 @@ argument_specs:
         default: temporal
       temporal_server_postgres_password_file:
         type: path
-        description: Managed-host runtime file readable by temporal; supplied outside its home.
-        required: true
+        description: Host-generated database login password file outside the home.
+        default: /etc/temporal-host/postgres-password
       temporal_server_frontend_port:
         type: int
         description: Host loopback frontend port.
         default: 7233
-      temporal_server_metrics_port:
-        type: int
-        description: Host loopback Prometheus port.
-        default: 8000
       temporal_server_tls_server_name:
         type: str
         description: DNS subject alternative name on the server certificate.
-        default: temporal.example.com
+        default: temporal-server
       temporal_server_dynamic_config:
         type: dict
         description: Mounted dynamic configuration without history or rate limit overrides.
@@ -60,37 +56,6 @@ argument_specs:
           key_file:
             type: path
             description: Key file.
-      temporal_server_namespaces:
-        type: list
-        description: Namespaces with retention in days and archival disabled.
-        elements: dict
-        options:
-          name:
-            type: str
-            description: Name.
-            required: true
-          retention_days:
-            type: int
-            description: Retention days.
-            required: true
-      temporal_server_search_attributes:
-        type: list
-        description: Search attribute names and types applied to each managed namespace.
-        elements: dict
-        options:
-          name:
-            type: str
-            description: Name.
-            required: true
-          type:
-            type: str
-            description: Type.
-            required: true
-            choices: [Keyword, Int, Text, Bool, Double, Datetime, KeywordList]
-      temporal_textfile_dir:
-        type: path
-        default: /var/lib/temporal-textfile
-        description: Shared textfile collector directory owned by temporal.
       temporal_network_name:
         type: str
         required: true

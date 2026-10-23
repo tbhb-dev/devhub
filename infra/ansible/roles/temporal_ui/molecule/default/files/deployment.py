@@ -2,10 +2,10 @@
 # cspell:ignore getpwnam
 """Temporal deployment acceptance checks, run as root inside Molecule."""
 
-import hashlib
 import json
 import pwd
 import socket
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +14,10 @@ STATE = Path("/opt/temporal-playbook-test")
 PROBE_IMAGE = (
     "busybox@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e"
 )
+
+
+def without_comments(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.startswith("#"))
 
 
 def run(*args: str) -> str:
@@ -48,30 +52,23 @@ def check_listeners(before: list[str], after: list[str], ports: list[int]) -> No
         assert matches == [f"127.0.0.1:{port}"], matches
 
 
-def digest(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def before_remove(args: list[str]) -> None:
-    frontend, metrics, ui = map(int, args[:3])
+def deployment(args: list[str]) -> None:
     check_listeners(
-        json.loads((STATE / "listeners.json").read_text()),
-        listeners(),
-        [frontend, metrics, ui],
+        json.loads((STATE / "listeners.json").read_text()), listeners(), [7233, 8080]
     )
-    # A refused probe is meaningful only while the actual frontend is reachable.
-    with socket.create_connection(("127.0.0.1", frontend), timeout=5):
+    assert not any(endpoint.endswith(":8000") for endpoint in listeners())
+    with socket.create_connection(("127.0.0.1", 7233), timeout=5):
         pass
-    frontend_service, ui_service = args[5:7]
+    frontend_service, ui_service = args
     calls = (STATE / "tailscale.calls").read_text().splitlines()
-    for service, port in [(frontend_service, frontend), (ui_service, ui)]:
-        assert (
-            f"serve --bg --service={service} --tcp={port} tcp://127.0.0.1:{port}"
-            in calls
-        ), calls
-    assert not any(
-        "--tls-terminated-tcp" in line or "--https" in line for line in calls
-    ), calls
+    frontend_call = (
+        f"serve --bg --service={frontend_service} --tcp=7233 tcp://127.0.0.1:7233"
+    )
+    ui_call = f"serve --bg --service={ui_service} --https=443 http://127.0.0.1:8080"
+    assert frontend_call in calls, calls
+    assert ui_call in calls, calls
+    assert calls.index(frontend_call) < calls.index(ui_call), calls
+    assert not any("--tls-terminated-tcp" in line for line in calls), calls
     # --network host means the second daemon's rootless network namespace.
     # Its default gateway is the host gateway, not this container's loopback.
     user_run("temporal-probe", "docker", "pull", PROBE_IMAGE)
@@ -92,72 +89,117 @@ def before_remove(args: list[str]) -> None:
     )
     assert result.strip() == "refused", result
     (STATE / "probe.result").write_text(result)
-    data, dumps = map(Path, args[3:5])
-    assert data.is_dir(), data
-    assert any(data.iterdir()), data
-    latest = max(dumps.glob("*.sql"), key=lambda path: path.stat().st_mtime_ns)
-    assert latest.stat().st_size > 0, latest
-    # PG_VERSION survives a clean shutdown; transient database files may not.
-    retained = {str(path): digest(path) for path in data.rglob("PG_VERSION")}
-    assert retained, data
-    (STATE / "retained.json").write_text(
-        json.dumps(
-            {
-                "data": str(data),
-                "dump": str(latest),
-                "dump_hash": digest(latest),
-                "files": retained,
-            }
+
+
+def files(args: list[str]) -> None:
+    home = Path("/var/lib/temporal")
+    uid = pwd.getpwnam("temporal").pw_uid
+    gid = pwd.getpwnam("temporal").pw_gid
+    specification = json.loads((STATE / "spec.json").read_text())
+    expected = {
+        "docker.service": (".config/systemd/user/docker.service", 0o644),
+        "docker-drop-in.conf": (
+            ".config/systemd/user/docker.service.d/temporal-server.conf",
+            0o600,
+        ),
+        "postgres-init": (".config/temporal-postgres/init.sh", 0o644),
+        "postgres-start": (".local/bin/temporal-postgres-start", 0o700),
+        "postgres.service": (".config/systemd/user/temporal-postgres.service", 0o644),
+        "config.yml": (".config/temporal-server/config.yml", 0o600),
+        "dynamic.yml": (".config/temporal-server/dynamic.yml", 0o600),
+        "server-start": (".local/bin/temporal-server-start", 0o700),
+        "server.service": (".config/systemd/user/temporal-server.service", 0o600),
+        "ui.env": (".config/temporal-ui/ui.env", 0o600),
+        "ui.service": (".config/systemd/user/temporal-ui.service", 0o644),
+    }
+    for fixture, (relative, mode) in expected.items():
+        path = home / relative
+        content = specification[fixture].replace("/run/user/1000", f"/run/user/{uid}")
+        actual = path.read_text()
+        if fixture == "docker.service":
+            # The shared docker_rootless unit carries explanatory comments that
+            # the Temporal specification does not.
+            actual = without_comments(actual)
+            content = without_comments(content)
+        assert actual == content, path
+        info = path.stat()
+        assert (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (
+            uid,
+            gid,
+            mode,
+        ), path
+    for kind, service in zip(("frontend", "ui"), args, strict=True):
+        path = Path(f"/etc/systemd/system/temporal-{kind}-tailnet.service")
+        content = specification[f"{kind}-tailnet.service"].replace(
+            f"svc:temporal-{kind}", service
         )
-    )
-
-
-def after_remove(args: list[str]) -> None:
-    network, units, containers = args
-    remaining = user_run(
-        "temporal", "docker", "ps", "-a", "--format", "{{.Names}}"
-    ).splitlines()
-    assert not set(remaining).intersection(containers.split(",")), remaining
-    networks = user_run(
-        "temporal", "docker", "network", "ls", "--format", "{{.Name}}"
-    ).splitlines()
-    assert network not in networks, networks
-    enabled = user_run(
-        "temporal",
-        "systemctl",
-        "--user",
-        "list-unit-files",
-        "--state=enabled",
-        "--no-legend",
-        "--no-pager",
-    ).split()
-    assert not set(units.split(",")).intersection(enabled), enabled
-    active = user_run(
-        "temporal",
-        "systemctl",
-        "--user",
-        "list-units",
-        "--state=active",
-        "--no-legend",
-        "--no-pager",
-    ).split()
-    assert not set(units.split(",")).intersection(active), active
-    for unit in ("temporal-frontend-tailnet.service", "temporal-ui-tailnet.service"):
-        assert not Path("/etc/systemd/system", unit).exists(), unit
-    assert (STATE / "probe.result").read_text().strip() == "refused"
-    saved = json.loads((STATE / "retained.json").read_text())
-    assert Path(saved["data"]).is_dir()
-    assert digest(saved["dump"]) == saved["dump_hash"]
-    assert all(digest(path) == checksum for path, checksum in saved["files"].items())
+        assert path.read_text() == content, path
+        info = path.stat()
+        assert (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (
+            0,
+            0,
+            0o644,
+        ), path
+    for root, names, mode in (
+        (
+            Path("/etc/temporal-host"),
+            [
+                "ca.pem",
+                "server.pem",
+                "server.key",
+                "client.pem",
+                "client.key",
+                "postgres-password",
+                "postgres-admin-password",
+            ],
+            0o400,
+        ),
+        (
+            home / ".config/temporal-ui/tls",
+            ["ca.pem", "certificate.pem", "private-key.pem"],
+            0o400,
+        ),
+        (
+            home / ".config/temporal-server/tls",
+            ["ca.pem", "server.pem", "server.key", "client.pem", "client.key"],
+            0o600,
+        ),
+    ):
+        for name in names:
+            path = root / name
+            info = path.stat()
+            assert (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (
+                uid,
+                gid,
+                mode,
+            ), path
+    for name in ("ca.pem", "server.pem", "server.key", "client.pem", "client.key"):
+        assert (home / ".config/temporal-server/tls" / name).read_bytes() == (
+            Path("/etc/temporal-host") / name
+        ).read_bytes()
+    for relative in (
+        "dumps",
+        ".config/op",
+        ".local/libexec/temporal-ui-certificates",
+        ".local/bin/temporal-postgres-dump",
+        ".local/bin/temporal-server-reconcile",
+        ".config/temporal-server/namespaces.json",
+        ".config/systemd/user/temporal-postgres-dump.service",
+        ".config/systemd/user/temporal-postgres-dump.timer",
+    ):
+        assert not (home / relative).exists(), relative
+    assert not Path("/var/lib/temporal-docker-data.img").exists()
+    assert not Path("/var/lib/temporal-textfile").exists()
+    assert not Path("/etc/temporal-postgres/op.env").exists()
 
 
 if __name__ == "__main__":
     command, *arguments = sys.argv[1:]
     if command == "baseline":
         (STATE / "listeners.json").write_text(json.dumps(listeners()))
-    elif command == "before-remove":
-        before_remove(arguments)
-    elif command == "after-remove":
-        after_remove(arguments)
+    elif command == "deployment":
+        deployment(arguments)
+    elif command == "files":
+        files(arguments)
     else:
         raise ValueError(command)

@@ -9,7 +9,6 @@ import socket
 import ssl
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 
@@ -21,7 +20,6 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
 
 home = Path.home()
 config = home / ".config/temporal-server"
-settings = json.loads((config / "namespaces.json").read_text())
 tls = config / "tls"
 base = [
     "docker",
@@ -35,7 +33,7 @@ base = [
     f"type=bind,src={tls},dst=/tls,readonly",
     "--entrypoint",
     "temporal",
-    settings["admin_image"],
+    "temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca",
     "--address",
     "127.0.0.1:7233",
     "--tls-ca-path",
@@ -45,7 +43,7 @@ base = [
     "--tls-key-path",
     "/tls/client.key",
     "--tls-server-name",
-    settings["server_name"],
+    "temporal-server",
     "--output",
     "json",
 ]
@@ -61,23 +59,6 @@ assert len(processes) == 1, processes
 for service in ("frontend", "history", "matching", "worker"):
     assert f"--service {service}" in processes[0], processes
 
-# AC3/4: query both namespace configs and all attribute types without mutation.
-for namespace in settings["namespaces"]:
-    flags = ["--namespace", namespace["name"]]
-    data = json.loads(run(*base, "operator", "namespace", "describe", *flags).stdout)
-    ns_config = data["config"]
-    assert (
-        ns_config["workflowExecutionRetentionTtl"]
-        == f"{namespace['retention_days'] * 86400}s"
-    )
-    for kind in ("history", "visibility"):
-        assert ns_config[f"{kind}ArchivalState"] == "ARCHIVAL_STATE_DISABLED"
-    attrs = json.loads(
-        run(*base, "operator", "search-attribute", "list", *flags).stdout
-    )["customAttributes"]
-    for attr in settings["attributes"]:
-        assert attrs[attr["name"]] == "INDEXED_VALUE_TYPE_" + attr["type"].upper()
-
 # AC5: positive and two negative frontend handshakes on host loopback.
 for certificate in ("client", None, "wrong"):
     context = ssl.create_default_context(cafile=str(tls / "ca.pem"))
@@ -92,7 +73,7 @@ for certificate in ("client", None, "wrong"):
     try:
         with (
             socket.create_connection(("127.0.0.1", 7233), timeout=5) as connection,
-            context.wrap_socket(connection, server_hostname=settings["server_name"]),
+            context.wrap_socket(connection, server_hostname="temporal-server"),
         ):
             assert certificate == "client", "Unauthenticated client accepted"
     except ssl.SSLError:
@@ -107,7 +88,7 @@ probe_code = (
     "import socket,ssl; c=ssl.create_default_context(cafile='/tls/ca.pem'); "
     "c.maximum_version=ssl.TLSVersion.TLSv1_2; "
     "c.wrap_socket(socket.create_connection(('127.0.0.1',7234),timeout=5),"
-    "server_hostname='temporal.example.com')"
+    "server_hostname='temporal-server')"
 )
 probe = run(
     "docker",
@@ -151,7 +132,7 @@ for certificate in (None, "wrong"):
         "--tls-ca-path",
         "/fixtures/ca.pem",
         "--tls-server-name",
-        "temporal.example.com",
+        "temporal-server",
         "--command-timeout",
         "10s",
     ]
@@ -180,14 +161,14 @@ assert not re.search(
 # AC8: ss and inspect must agree on loopback.
 # Exercise both loopback and external probes.
 listeners = run("ss", "-H", "-ltn").stdout.splitlines()
-for port in (7233, 8000):
+for port in (7233,):
     matching = [
         line.split()[3] for line in listeners if line.split()[3].endswith(f":{port}")
     ]
     assert matching == [f"127.0.0.1:{port}"], matching
-    assert info["HostConfig"]["PortBindings"][
-        f"{7233 if port == 7233 else 8000}/tcp"
-    ] == [{"HostIp": "127.0.0.1", "HostPort": str(port)}]
+    assert info["HostConfig"]["PortBindings"][f"{port}/tcp"] == [
+        {"HostIp": "127.0.0.1", "HostPort": str(port)}
+    ]
     interfaces = json.loads(
         run("ip", "-j", "-4", "address", "show", "scope", "global").stdout
     )
@@ -204,23 +185,20 @@ for port in (7233, 8000):
                 raise AssertionError(message)
         except OSError:
             pass
-with urllib.request.urlopen("http://127.0.0.1:8000/metrics", timeout=10) as response:
-    assert re.search(rb"(?:temporal|service_requests|history_)\w*", response.read())
-
-# AC9: validate every metric against openssl, including the CA.
-textfile = Path("/var/lib/temporal-textfile")
-assert textfile.stat().st_uid == os.getuid()
-assert textfile.stat().st_mode & 0o002 == 0
-metrics = (textfile / "temporal-server.prom").read_text()
-for name in ("ca", "server", "client"):
-    expiry = run(
-        "openssl", "x509", "-in", str(tls / f"{name}.pem"), "-noout", "-enddate"
-    ).stdout.strip()
-    timestamp = int(ssl.cert_time_to_seconds(expiry.removeprefix("notAfter=")))
-    assert (
-        f'temporal_cert_expiry_timestamp_seconds{{certificate="{name}"}} {timestamp}'
-        in metrics
-    )
+assert set(info["HostConfig"]["PortBindings"]) == {"7233/tcp"}
+assert not any(line.split()[3].endswith(":8000") for line in listeners)
+assert "metrics:" not in (config / "config.yml").read_text()
+assert dynamic == "{}\n"
+assert not (config / "namespaces.json").exists()
+assert not (home / ".local/bin/temporal-server-reconcile").exists()
+assert not Path("/var/lib/temporal-textfile").exists()
+for name in ("ca.pem", "server.pem", "server.key", "client.pem", "client.key"):
+    source = Path("/etc/temporal-host") / name
+    assert source.read_bytes() == (tls / name).read_bytes()
+    assert source.stat().st_mode & 0o777 == 0o400
+    assert (tls / name).stat().st_mode & 0o777 == 0o600
+    assert source.stat().st_uid == os.getuid()
+    assert (tls / name).stat().st_uid == os.getuid()
 
 # AC2: no schema auto-setup in the server image; a fresh database must be refused.
 run(
@@ -290,4 +268,4 @@ finally:
         "-c",
         "DROP DATABASE temporal_unmigrated",
     )
-sys.stdout.write("AC1-AC9 acceptance probes passed\n")
+sys.stdout.write("Server acceptance probes passed\n")

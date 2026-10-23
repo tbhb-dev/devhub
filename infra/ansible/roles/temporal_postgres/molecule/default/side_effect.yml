@@ -1,5 +1,5 @@
 ---
-- name: Exercise the dump timer and restore
+- name: Check PostgreSQL 16 and retain password evidence
   hosts: all
   become: true
   tasks:
@@ -8,7 +8,7 @@
         database: passwd
         key: temporal
 
-    - name: Test PostgreSQL 16 and exercise the timer and restore
+    - name: Test PostgreSQL 16 and record the password files
       become: true
       become_user: temporal
       environment:

@@ -1,4 +1,3 @@
-# {{ ansible_managed }}
 [Unit]
 Description=Temporal PostgreSQL
 Requires=docker.service
@@ -7,7 +6,6 @@ After=docker.service
 [Service]
 Type=notify
 NotifyAccess=all
-EnvironmentFile=-{{ temporal_postgres_op_environment_file }}
 ExecStart=%h/.local/bin/temporal-postgres-start
 ExecStop=/usr/bin/docker stop --time 30 temporal-postgres
 ExecStopPost=-/usr/bin/docker rm -f temporal-postgres

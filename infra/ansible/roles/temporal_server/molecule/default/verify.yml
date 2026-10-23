@@ -29,7 +29,7 @@
           USER root
           RUN apk add --no-cache python3
       changed_when: false
-    - name: Verify health, process, namespaces, TLS, configuration, ports and expiry
+    - name: Verify health, process, TLS, configuration, ports and certificates
       become: true
       become_user: temporal
       environment:

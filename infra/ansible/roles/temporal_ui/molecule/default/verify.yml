@@ -1,3 +1,6 @@
 ---
-- name: Verify the removed deployment
+- name: Verify the running UI
+  ansible.builtin.import_playbook: ui-verify.yml
+
+- name: Verify deployment exposure
   ansible.builtin.import_playbook: temporal-verify.yml

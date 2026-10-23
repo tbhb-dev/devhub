@@ -15,10 +15,6 @@ argument_specs:
         type: int
         default: 8080
         description: Host port published only on IPv4 loopback.
-      temporal_ui_codec_endpoint:
-        type: str
-        default: ""
-        description: Optional codec endpoint; empty disables it.
       temporal_ui_home:
         type: path
         default: /var/lib/temporal
@@ -29,17 +25,5 @@ argument_specs:
         description: Frontend container DNS name and port on temporal_network_name.
       temporal_ui_tls_server_name:
         type: str
-        default: temporal.example.com
+        default: temporal-server
         description: Name verified against the frontend certificate SAN.
-      temporal_ui_client_certificate_vault:
-        type: str
-        default: ""
-        description: Private inventory selector for the vault holding the client certificate item.
-      temporal_ui_client_certificate_item:
-        type: str
-        default: ""
-        description: Private inventory item with ca, certificate and private-key fields.
-      temporal_ui_op_token_file:
-        type: str
-        default: .config/op/service-account-token
-        description: Service account token path relative to the home; provisioned separately.

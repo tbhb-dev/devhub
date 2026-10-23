@@ -23,11 +23,6 @@ global:
   membership:
     maxJoinDuration: 30s
     broadcastAddress: 127.0.0.1
-  metrics:
-    prometheus:
-      framework: tally
-      timerType: histogram
-      listenAddress: 0.0.0.0:8000
   tls:
 {% for group in ['internode', 'frontend'] %}
     {{ group }}:

@@ -1,5 +1,0 @@
-# HELP temporal_cert_expiry_timestamp_seconds Certificate expiry as a Unix timestamp.
-# TYPE temporal_cert_expiry_timestamp_seconds gauge
-{% for result in temporal_server_expiry.results %}
-temporal_cert_expiry_timestamp_seconds{certificate="{{ result.item.name }}"} {{ ((result.stdout | regex_replace('^notAfter=', '') | to_datetime('%b %d %H:%M:%S %Y %Z')) - ('1970-01-01' | to_datetime('%Y-%m-%d'))).total_seconds() | int }}
-{% endfor %}

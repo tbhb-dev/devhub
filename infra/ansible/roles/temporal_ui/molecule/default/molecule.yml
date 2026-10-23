@@ -33,27 +33,11 @@ provisioner:
         docker_rootless_user: temporal
         docker_rootless_home: /var/lib/temporal
         docker_rootless_data_size: ""
-        docker_rootless_data_image: /var/lib/temporal-docker-data.img
-        temporal_host_op_token_src: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/host-op-token"
-        temporal_host_certificate_items:
-          server: {vault: example-vault, item: server}
-          internal: {vault: example-vault, item: client}
         temporal_network_name: temporal
         temporal_server_frontend_port: 7233
-        temporal_server_metrics_port: 8000
         temporal_ui_loopback_port: 8080
         temporal_frontend_service: svc:example-temporal
         temporal_ui_service: svc:example-temporal-ui
-        temporal_ui_client_certificate_vault: example-vault
-        temporal_ui_client_certificate_item: client
-        temporal_postgres_op_admin_password:
-          vault: example-vault
-          item: example-admin
-          field: password
-        temporal_postgres_op_login_password:
-          vault: example-vault
-          item: example-login
-          field: password
         temporal_server_postgres_host: temporal-postgres
         temporal_server_postgres_user: temporal
 

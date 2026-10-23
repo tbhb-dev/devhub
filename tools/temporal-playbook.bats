@@ -37,3 +37,9 @@ check([], ['127.0.0.1:8080'], [7233, 8080])
 PY
   [ "$status" -ne 0 ]
 }
+
+@test "Temporal deployment matches the hand deployment specification" {
+  run uv run --group ops pytest -q "$root/tools/test_temporal_spec.py"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+}

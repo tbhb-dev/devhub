@@ -133,7 +133,7 @@ run_pool() {
 }
 
 @test "apply-scoped refuses any playbook name but ssh, runner-pool and temporal before an agent starts" {
-  for arg in site accounts verify temporal-remove playbooks/ssh.yml ../ssh ssh.yml '' --check; do
+  for arg in site accounts verify playbooks/ssh.yml ../ssh ssh.yml '' --check; do
     run_pool bash "$script" apply-scoped "$arg"
     [ "$status" -eq 2 ]
     [[ $output == usage:* ]]

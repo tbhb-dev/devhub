@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
+import hashlib
 import json
-import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
-STUB_VALUE = "molecule-stub-password-27"
+SECRETS = Path("/etc/temporal-host")
 HOME = Path("/var/lib/temporal")
-DUMPS = HOME / "dumps"
 EVIDENCE = Path(tempfile.gettempdir()) / "temporal-postgres-evidence.json"
-RESTORE = "temporal-postgres-restore"
 
 
 def run(*args: str, stdin: str | None = None, check: bool = True) -> str:
@@ -63,7 +61,7 @@ def checks(major: int) -> None:
                 '-h 127.0.0.1 -U temporal -d "$1" -c "SELECT current_user"',
                 "bash",
                 database,
-                stdin=STUB_VALUE + "\n",
+                stdin=(SECRETS / "postgres-password").read_text() + "\n",
             )
             == "temporal"
         )
@@ -112,123 +110,64 @@ def checks(major: int) -> None:
         line.split()[3].rsplit(":", 1)[-1] != "5432" for line in listeners.splitlines()
     )
     assert not info["HostConfig"]["PortBindings"]
-    assert "temporal-postgres-dump.timer" in run(
-        "systemctl", "--user", "list-timers", "--all", "--no-pager"
+    passwords = [
+        (SECRETS / name).read_text()
+        for name in ("postgres-password", "postgres-admin-password")
+    ]
+    assert passwords[0] != passwords[1]
+    for password in passwords:
+        assert re.fullmatch(r"[A-Za-z0-9]{1,48}", password)
+        for container in run("docker", "ps", "-aq").splitlines():
+            assert password not in run("docker", "inspect", container)
+        for image_id in run("docker", "image", "ls", "-q").splitlines():
+            assert password not in run("docker", "history", "--no-trunc", image_id)
+        assert password not in run(
+            "systemctl", "--user", "cat", "temporal-postgres.service"
+        )
+    assert (
+        run("docker", "exec", "temporal-postgres", "ls", "-A", "/run/secrets")
+        == "ready"
     )
-    for container in run("docker", "ps", "-aq").splitlines():
-        assert STUB_VALUE not in run("docker", "inspect", container)
-    for image_id in run("docker", "image", "ls", "-q").splitlines():
-        assert STUB_VALUE not in run("docker", "history", "--no-trunc", image_id)
-    for unit in (
-        "temporal-postgres.service",
-        "temporal-postgres-dump.service",
-        "temporal-postgres-dump.timer",
-    ):
-        assert STUB_VALUE not in run("systemctl", "--user", "cat", unit)
-    print(f"AC1-5, AC6 timer, AC8 inspect/history/units: PostgreSQL {major} passed")
+    for name in ("temporal-postgres-dump",):
+        assert not (HOME / ".local/bin" / name).exists()
+    assert not (HOME / "dumps").exists()
+    for unit in ("temporal-postgres-dump.timer", "temporal-postgres-dump.service"):
+        assert not (HOME / ".config/systemd/user" / unit).exists()
+    assert not Path("/var/lib/temporal-docker-data.img").exists()
+    assert not list(Path("/etc/systemd/system").glob("*temporal*docker*.mount"))
+    assert not (HOME / ".config/op").exists()
+    assert not Path("/etc/temporal-postgres/op.env").exists()
+    print(f"PostgreSQL {major}: authentication, isolation and credential checks passed")
+
+
+def password_state() -> dict[str, list[str | int]]:
+    return {
+        p.name: [hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_mtime_ns]
+        for p in SECRETS.glob("postgres*password")
+    }
 
 
 def side_effect() -> None:
     checks(16)
-    for database in ("temporal", "temporal_visibility"):
-        sql(
-            database,
-            "CREATE TABLE restore_probe (value integer); "
-            "INSERT INTO restore_probe VALUES (27)",
-        )
-    for days in (15, 13):
-        fixture = DUMPS / f"fixture-{days}.sql"
-        fixture.write_text("-- aged dump fixture\n")
-        modified = time.time() - days * 86400
-        os.utime(fixture, (modified, modified))
-    before = set(DUMPS.glob("temporal-*.sql"))
-    # Trigger the real timer shortly, then remove only the test override.
-    override = (
-        Path(os.environ["XDG_RUNTIME_DIR"])
-        / "systemd/user/temporal-postgres-dump.timer.d"
-    )
-    override.mkdir(parents=True)
-    config = override / "molecule.conf"
-    config.write_text("[Timer]\nOnCalendar=\nOnActiveSec=1s\n")
-    run("systemctl", "--user", "daemon-reload")
-    run("systemctl", "--user", "restart", "temporal-postgres-dump.timer")
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        new = set(DUMPS.glob("temporal-*.sql")) - before
-        if new and not (DUMPS / "fixture-15.sql").exists():
-            break
-        time.sleep(0.2)
-    else:
-        message = "the dump timer did not finish within 60 seconds"
-        raise AssertionError(message)
-    assert (DUMPS / "fixture-13.sql").exists()
-    config.unlink()
-    run("systemctl", "--user", "daemon-reload")
-    run("systemctl", "--user", "restart", "temporal-postgres-dump.timer")
-    dump = max(new)
-    image = json.loads(run("docker", "inspect", "temporal-postgres"))[0]["Config"][
-        "Image"
-    ]
-    run(
-        "docker",
-        "run",
-        "-d",
-        "--name",
-        RESTORE,
-        "--network",
-        "temporal",
-        "--env",
-        "POSTGRES_HOST_AUTH_METHOD=trust",
-        image,
-    )
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if run(
-            "docker", "exec", RESTORE, "pg_isready", "-h", "127.0.0.1", check=False
-        ).endswith("accepting connections"):
-            break
-        time.sleep(0.2)
-    else:
-        message = "the fresh restore container did not start"
-        raise AssertionError(message)
-    sql("postgres", "CREATE ROLE temporal LOGIN", RESTORE)
-    run(
-        "docker",
-        "exec",
-        "-i",
-        RESTORE,
-        "psql",
-        "-X",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
-        "postgres",
-        "-d",
-        "postgres",
-        stdin=dump.read_text(),
-    )
-    EVIDENCE.write_text(json.dumps({"version": 16, "dump": dump.name, "timer": True}))
-    print(
-        "AC6-7: timer dumped both databases, pruned the expired fixture "
-        "and restored the dump"
-    )
+    EVIDENCE.write_text(json.dumps(password_state()))
 
 
 def verify() -> None:
     checks(15)
-    evidence = json.loads(EVIDENCE.read_text())
-    assert evidence["version"] == 16
-    assert evidence["timer"]
-    assert (DUMPS / evidence["dump"]).is_file()
-    assert not (DUMPS / "fixture-15.sql").exists()
-    assert (DUMPS / "fixture-13.sql").exists()
-    for database in ("temporal", "temporal_visibility"):
-        assert sql(database, "SELECT value FROM restore_probe", RESTORE) == "27"
-    print("AC1, AC6-7: both versions and both restored databases passed")
+    assert json.loads(EVIDENCE.read_text()) == password_state()
+    print("Both passwords survived the second converge unchanged")
 
 
 def home() -> None:
-    needle = STUB_VALUE.encode()
+    passwords = [
+        (SECRETS / name).read_bytes()
+        for name in ("postgres-password", "postgres-admin-password")
+    ]
+    for name in ("postgres-password", "postgres-admin-password"):
+        info = (SECRETS / name).stat()
+        assert stat.S_IMODE(info.st_mode) == 0o400
+        assert info.st_uid == HOME.stat().st_uid
+        assert info.st_gid == HOME.stat().st_gid
     for path in [HOME, *HOME.rglob("*")]:
         info = path.lstat()
         assert info.st_uid != 0, path
@@ -238,10 +177,10 @@ def home() -> None:
         with path.open("rb") as stream:
             overlap = b""
             while block := stream.read(1024 * 1024):
-                assert needle not in overlap + block, path
-                overlap = block[-len(needle) :]
+                assert all(needle not in overlap + block for needle in passwords), path
+                overlap = block[-48:]
     print(
-        "AC8-9: no stub password in any regular file under the home; "
+        "No generated password in any regular file under the home; "
         "no root-owned entries"
     )
 

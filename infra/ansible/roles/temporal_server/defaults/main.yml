@@ -7,21 +7,11 @@ temporal_server_admin_tools_digest: sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1
 temporal_server_postgres_host: temporal-postgres
 temporal_server_postgres_user: temporal
 temporal_server_frontend_port: 7233
-temporal_server_metrics_port: 8000
-temporal_server_tls_server_name: temporal.example.com
+temporal_server_tls_server_name: temporal-server
 # Files already provisioned on the managed host; never vault references here.
-temporal_server_certificates: []
-temporal_server_namespaces:
-  - {name: coord, retention_days: 30}
-  - {name: coord-test, retention_days: 3}
-temporal_server_search_attributes:
-  - {name: CoordRepo, type: Keyword}
-  - {name: CoordKind, type: Keyword}
-  - {name: CoordState, type: Keyword}
-  - {name: CoordHostClass, type: Keyword}
-  - {name: CoordHarness, type: Keyword}
-  - {name: CoordMode, type: Keyword}
-  - {name: CoordNumber, type: Int}
-  - {name: CoordRound, type: Int}
+temporal_server_postgres_password_file: /etc/temporal-host/postgres-password
+temporal_server_certificates:
+  - {name: ca, cert_file: /etc/temporal-host/ca.pem}
+  - {name: server, cert_file: /etc/temporal-host/server.pem, key_file: /etc/temporal-host/server.key}
+  - {name: client, cert_file: /etc/temporal-host/client.pem, key_file: /etc/temporal-host/client.key}
 temporal_server_dynamic_config: {}
-temporal_textfile_dir: /var/lib/temporal-textfile  # noqa var-naming[no-role-prefix] -- shared contract from issue 28

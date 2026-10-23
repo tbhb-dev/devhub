@@ -29,13 +29,6 @@ provisioner:
         docker_rootless_home: /var/lib/temporal
         docker_rootless_data_size: ""
         temporal_network_name: temporal
-        temporal_server_postgres_password_file: /run/temporal-fixtures/password
-        temporal_postgres_op_admin_password: {vault: example-vault, item: example-admin, field: password}
-        temporal_postgres_op_login_password: {vault: example-vault, item: example-login, field: password}
-        temporal_server_certificates:
-          - {name: ca, cert_file: /run/temporal-fixtures/ca.pem}
-          - {name: server, cert_file: /run/temporal-fixtures/server.pem, key_file: /run/temporal-fixtures/server.key}
-          - {name: client, cert_file: /run/temporal-fixtures/client.pem, key_file: /run/temporal-fixtures/client.key}
 verifier:
   name: ansible
 scenario:

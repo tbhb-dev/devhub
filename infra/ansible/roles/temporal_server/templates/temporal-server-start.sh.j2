@@ -1,22 +1,19 @@
 #!/bin/bash
-# cspell:ignore rstrip
 set -euo pipefail
 umask 077
 config="$HOME/.config/temporal-server"
 runtime="$XDG_RUNTIME_DIR/temporal-server"
 password_file={{ temporal_server_postgres_password_file | quote }}
-admin={{ temporal_server_admin_image | quote }}
-server={{ temporal_server_image | quote }}
+admin='{{ temporal_server_admin_image }}'
+server='{{ temporal_server_image }}'
 network={{ temporal_network_name | quote }}
 postgres_host={{ temporal_server_postgres_host | quote }}
 postgres_user={{ temporal_server_postgres_user | quote }}
-# Pull before migration, so a missing image cannot leave a partial upgrade.
 docker image inspect "$admin" >/dev/null 2>&1 || docker pull "$admin"
 docker image inspect "$server" >/dev/null 2>&1 || docker pull "$server"
 for database in temporal temporal_visibility; do
   schema=temporal
   if [[ $database == temporal_visibility ]]; then schema=visibility; fi
-  # The password enters the tool through stdin, never Docker's environment metadata.
   migration=$(cat "$password_file" | docker run --rm -i --user 0 --network "$network" \
     --entrypoint /bin/sh "$admin" -ec '
       SQL_PASSWORD=$(cat)
@@ -31,7 +28,6 @@ for database in temporal temporal_visibility; do
   test "$actual" = "$expected"
 done
 echo 'Temporal schema migrations complete; starting server {{ temporal_server_version }}'
-# JSON quoting is valid YAML and keeps passwords with quotes or newlines intact.
 python3 - "$config/config.yml" "$password_file" "$runtime/docker.yaml" <<'PYTHON'
 import json
 import pathlib
@@ -41,7 +37,6 @@ target.write_text(source.read_text().replace('"__RUNTIME_PASSWORD__"', json.dump
 PYTHON
 exec docker run --rm --name temporal-server --user 0 --network "$network" \
   --publish 127.0.0.1:{{ temporal_server_frontend_port }}:7233 \
-  --publish 127.0.0.1:{{ temporal_server_metrics_port }}:8000 \
   --mount "type=bind,src=$runtime,dst=/runtime,readonly" \
   --mount "type=bind,src=$config/tls,dst=/tls,readonly" \
   --mount "type=bind,src=$config/dynamic.yml,dst=/dynamic.yml,readonly" \

@@ -29,14 +29,6 @@ provisioner:
       all:
         ansible_user: ops
         docker_rootless_data_size: ""
-        temporal_postgres_op_admin_password:
-          vault: example-vault
-          item: example-admin
-          field: password
-        temporal_postgres_op_login_password:
-          vault: example-vault
-          item: example-login
-          field: password
 verifier:
   name: ansible
 scenario:

@@ -9,7 +9,7 @@
         database: passwd
         key: temporal
 
-    - name: Verify PostgreSQL 15 and the dump and restore evidence
+    - name: Verify PostgreSQL 15 and unchanged passwords
       become: true
       become_user: temporal
       environment:

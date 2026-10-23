@@ -1,5 +1,4 @@
 ---
-# cspell:ignore noout enddate slirp4netns
 - name: Validate the server contract
   ansible.builtin.assert:
     that:
@@ -12,7 +11,6 @@
       - temporal_server_admin_tools_digest is match('^sha256:[0-9a-f]{64}$')
       - temporal_server_version is version('1.31.0', '>=')
       - temporal_server_certificates | map(attribute='name') | sort == ['ca', 'client', 'server']
-      - temporal_server_frontend_port != temporal_server_metrics_port
     quiet: true
 
 - name: Reject throughput and history limit overrides
@@ -40,15 +38,28 @@
     temporal_server_uid: "{{ ansible_facts.getent_passwd.temporal[1] }}"
     temporal_server_home: "{{ ansible_facts.getent_passwd.temporal[4] }}"
 
-- name: Create the shared certificate metrics directory
-  ansible.builtin.file:
-    path: "{{ temporal_textfile_dir }}"
-    state: directory
-    owner: temporal
-    group: temporal
-    mode: "0755"
+- name: Inspect the provisioned certificates
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+    get_mime: false
+  loop: >-
+    {{ (temporal_server_certificates | map(attribute='cert_file') | list) +
+       (temporal_server_certificates | selectattr('key_file', 'defined') | map(attribute='key_file') | list) }}
+  register: temporal_server_certificate_files
 
-- name: Install and reconcile as temporal
+- name: Require certificates provisioned out of band
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.pw_name | default('') == 'temporal'
+      - item.stat.gr_name | default('') == 'temporal'
+      - item.stat.mode | default('') == '0400'
+    fail_msg: Certificates must be provisioned out of band, owned by temporal with mode 0400.
+    quiet: true
+  loop: "{{ temporal_server_certificate_files.results }}"
+
+- name: Install and start as temporal
   become: true
   become_user: temporal
   environment:
@@ -123,22 +134,7 @@
         mode: "0600"
       notify: Restart Temporal server
 
-    - name: Install namespace reconciliation
-      ansible.builtin.copy:
-        src: reconcile.py
-        dest: "{{ temporal_server_home }}/.local/bin/temporal-server-reconcile"
-        mode: "0700"
-
-    - name: Write desired namespaces and search attributes
-      ansible.builtin.copy:
-        content: >-
-          {{ {'namespaces': temporal_server_namespaces, 'attributes': temporal_server_search_attributes,
-              'server_name': temporal_server_tls_server_name,
-              'admin_image': temporal_server_admin_image} | to_nice_json }}
-        dest: "{{ temporal_server_home }}/.config/temporal-server/namespaces.json"
-        mode: "0600"
-
-    - name: Restart before reconciling namespaces
+    - name: Apply the server handlers before startup
       ansible.builtin.meta: flush_handlers
 
     - name: Enable and start Temporal
@@ -148,30 +144,3 @@
         daemon_reload: true
         enabled: true
         state: started
-
-    - name: Reconcile namespaces and attributes
-      ansible.builtin.command:
-        argv:
-          - "{{ temporal_server_home }}/.local/bin/temporal-server-reconcile"
-          - "{{ temporal_server_home }}/.config/temporal-server/namespaces.json"
-      register: temporal_server_reconcile
-      changed_when: "'changed' in temporal_server_reconcile.stdout_lines"
-
-    - name: Read installed certificate expiry dates
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - x509
-          - -in
-          - "{{ temporal_server_home }}/.config/temporal-server/tls/{{ item.name }}.pem"
-          - -noout
-          - -enddate
-      loop: "{{ temporal_server_certificates }}"
-      register: temporal_server_expiry
-      changed_when: false
-
-    - name: Publish certificate expiry timestamps
-      ansible.builtin.template:
-        src: certificates.prom.j2
-        dest: "{{ temporal_textfile_dir }}/temporal-server.prom"
-        mode: "0644"

@@ -5,8 +5,6 @@
   gather_facts: true
   gather_subset: [min]
   become: true
-  vars_files:
-    - vars/temporal.yml
   pre_tasks:
     - name: Validate the tailnet endpoints before installing anything
       ansible.builtin.assert:
@@ -17,7 +15,7 @@
           - temporal_server_frontend_port | int == 7233
           - temporal_ui_loopback_port | int > 0
           - temporal_ui_loopback_port | int <= 65535
-          - temporal_ui_loopback_port | int not in [53, 7233, temporal_server_metrics_port | int]
+          - temporal_ui_loopback_port | int == 8080
         quiet: true
   tasks:
     - name: Set up the Temporal daemon
@@ -27,14 +25,10 @@
         docker_rootless_user: temporal
         docker_rootless_home: /var/lib/temporal
         docker_rootless_subid_start: 655360
-        docker_rootless_data_image: /var/lib/temporal-docker-data.img
+        docker_rootless_data_size: ""
 
     - name: Provision the host credentials
       ansible.builtin.import_tasks: tasks/temporal-credentials.yml
-      vars:
-        temporal_host_token_source_path: >-
-          {{ temporal_host_op_token_src |
-             default(lookup('env', 'HOME') ~ '/.local/state/techops/temporal-host-op-token') }}
 
     - name: Apply Temporal PostgreSQL
       ansible.builtin.include_role:

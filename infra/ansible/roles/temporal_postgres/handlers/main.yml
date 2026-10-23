@@ -9,14 +9,3 @@
     scope: user
     daemon_reload: true
     state: restarted
-
-- name: Restart Temporal PostgreSQL dump timer
-  become: true
-  become_user: temporal
-  environment:
-    XDG_RUNTIME_DIR: /run/user/{{ docker_rootless_uid }}
-  ansible.builtin.systemd_service:
-    name: temporal-postgres-dump.timer
-    scope: user
-    daemon_reload: true
-    state: restarted

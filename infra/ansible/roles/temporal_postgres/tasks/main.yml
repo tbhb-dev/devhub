@@ -3,10 +3,8 @@
   ansible.builtin.assert:
     that:
       - temporal_postgres_max_connections >= 100
-      - temporal_postgres_dump_retention_days > 0
       - temporal_postgres_images[temporal_postgres_major | string] is match('^[^@\s]+@sha256:[0-9a-f]{64}$')
       - temporal_network_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
-      - temporal_postgres_op_environment_file is match('^/etc/')
     quiet: true
 
 - name: Set up the Temporal user's rootless daemon
@@ -15,12 +13,37 @@
   vars:
     docker_rootless_user: temporal
     docker_rootless_home: /var/lib/temporal
-    docker_rootless_data_image: /var/lib/temporal-docker-data.img
+    docker_rootless_data_size: ""
     # A different range from the runner pool on the same host.
     docker_rootless_subid_start: 655360
 
-- name: Install the password reader
-  ansible.builtin.import_tasks: password_reader.yml
+- name: Create the host credential directory
+  ansible.builtin.file:
+    path: /etc/temporal-host
+    state: directory
+    owner: temporal
+    group: temporal
+    mode: "0700"
+
+- name: Generate each database password only when absent
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      umask 077
+      head -c 36 /dev/urandom | base64 | tr -d '\n/+=' > /etc/temporal-host/{{ item }}
+    executable: /bin/bash
+    creates: /etc/temporal-host/{{ item }}
+  loop: [postgres-admin-password, postgres-password]
+  no_log: true
+
+- name: Protect the database password files
+  ansible.builtin.file:
+    path: /etc/temporal-host/{{ item }}
+    owner: temporal
+    group: temporal
+    mode: "0400"
+  loop: [postgres-admin-password, postgres-password]
+  no_log: true
 
 # Nothing under the home is written as root, including Ansible's copies.
 - name: Install PostgreSQL as the Temporal user
@@ -38,7 +61,6 @@
       loop:
         - /var/lib/temporal/.local/bin
         - /var/lib/temporal/.config/temporal-postgres
-        - "{{ temporal_postgres_dump_dir }}"
 
     - name: Create the PostgreSQL data mount
       ansible.builtin.file:
@@ -46,14 +68,33 @@
         state: directory
         mode: "0700"
 
-    - name: Create the Temporal network
-      community.docker.docker_network:
-        name: "{{ temporal_network_name }}"
+    - name: Inspect the Temporal network
+      ansible.builtin.command:
+        argv: [docker, network, inspect, "{{ temporal_network_name }}"]
+      register: temporal_postgres_network
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
-    - name: Pull the pinned PostgreSQL image
-      community.docker.docker_image:
-        name: "{{ temporal_postgres_images[temporal_postgres_major | string] }}"
-        source: pull
+    - name: Create the Temporal network when absent
+      ansible.builtin.command:
+        argv: [docker, network, create, "{{ temporal_network_name }}"]
+      when: temporal_postgres_network.rc != 0
+      changed_when: true
+
+    - name: Inspect the pinned PostgreSQL image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, "{{ temporal_postgres_images[temporal_postgres_major | string] }}"]
+      register: temporal_postgres_image
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Pull the pinned PostgreSQL image when absent
+      ansible.builtin.command:
+        argv: [docker, pull, "{{ temporal_postgres_images[temporal_postgres_major | string] }}"]
+      when: temporal_postgres_image.rc != 0
+      changed_when: true
 
     - name: Install the database initialization script
       ansible.builtin.copy:
@@ -67,7 +108,7 @@
         src: "{{ item }}.sh.j2"
         dest: /var/lib/temporal/.local/bin/temporal-postgres-{{ item }}
         mode: "0700"
-      loop: [start, dump]
+      loop: [start]
       diff: false
       notify: Restart Temporal PostgreSQL
 
@@ -76,23 +117,15 @@
         src: "{{ item }}.j2"
         dest: /var/lib/temporal/.config/systemd/user/{{ item }}
         mode: "0644"
-      loop: [temporal-postgres.service, temporal-postgres-dump.service, temporal-postgres-dump.timer]
+      loop: [temporal-postgres.service]
       notify:
         - Restart Temporal PostgreSQL
-        - Restart Temporal PostgreSQL dump timer
 
     - name: Enable and start PostgreSQL
       ansible.builtin.systemd_service:
         name: temporal-postgres.service
         scope: user
         daemon_reload: true
-        enabled: true
-        state: started
-
-    - name: Enable and start the dump timer
-      ansible.builtin.systemd_service:
-        name: temporal-postgres-dump.timer
-        scope: user
         enabled: true
         state: started
 

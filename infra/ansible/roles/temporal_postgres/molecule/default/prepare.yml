@@ -3,24 +3,6 @@
   hosts: all
   become: true
   tasks:
-    # /usr/local/bin precedes the packaged CLI. Only this stub is executed.
-    - name: Install the fixed password stub
-      ansible.builtin.copy:
-        dest: /usr/local/bin/op
-        content: |
-          #!/bin/sh
-          test "$1" = read || exit 1
-          scheme=op
-          case "$2" in
-            "$scheme://example-vault/example-admin/password"|"$scheme://example-vault/example-login/password")
-              printf '%s\n' 'molecule-stub-password-27'
-              ;;
-            *) exit 1 ;;
-          esac
-        owner: root
-        group: root
-        mode: "0755"
-
     - name: Install the acceptance helper
       ansible.builtin.copy:
         src: acceptance.py

@@ -17,8 +17,8 @@
   prConcurrentLimit: 0,
   prHourlyLimit: 0,
   extends: [
-    "github>tbhb-dev/devtools//.github/renovate-config.json5#830abe6dadce3e0b4c7ab4c5065560d2c3c76ed9", // v0.14.0
-    "github>tbhb-dev/devtools//.github/renovate-go-config.json5#830abe6dadce3e0b4c7ab4c5065560d2c3c76ed9", // v0.14.0
+    "github>tbhb-dev/devtools//.github/renovate-config.json5#4691c20b5500e73cc1a99c49737d18cf1876447f", // v0.17.0
+    "github>tbhb-dev/devtools//.github/renovate-go-config.json5#4691c20b5500e73cc1a99c49737d18cf1876447f", // v0.17.0
   ],
 
   repositories: ["tbhb-dev/techops-public"],

@@ -246,7 +246,15 @@ if [ "$gh_state" = ok ]; then
 default branch: {{.defaultBranchRef.name}}
 ' || exit $?
   printf '\nlabels:\n'
-  dt_gh label list --limit 100 || exit $?
+  owner_review_label=$(dt_owner_review_label) || exit $?
+  owner_review_label=$(printf '%s' "$owner_review_label" | tr '[:upper:]' '[:lower:]')
+  available_labels=$(dt_gh label list --limit 100 --json name --jq '.[].name') || exit $?
+  while IFS= read -r label; do
+    label_identity=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')
+    if [ "$label_identity" != "$owner_review_label" ]; then printf '%s\n' "$label"; fi
+  done <<EOF
+$available_labels
+EOF
   printf '\nopen milestones:\n'
   milestones=$(dt_gh_repo "query(\$owner:String!,\$name:String!){repository(owner:\$owner,name:\$name){milestones(first:100,states:OPEN){nodes{title} pageInfo{hasNextPage}}}}" --jq '.data.repository.milestones | if .pageInfo.hasNextPage then error("more than 100 open milestones") else .nodes[].title end') || exit $?
   if [ -n "$milestones" ]; then printf '%s\n' "$milestones"; else none; fi
@@ -291,7 +299,7 @@ if grant=$(dt_preapproval pr); then
   # shellcheck disable=SC2312 # Only formats diagnostic output; no decision uses the status.
   printf 'pr:    GRANTED, %s — the confirmation step is skipped once every gate and the review pass\n' "$(how "$grant")"
 else
-  if [ "${DT_UNATTENDED:-0}" = 1 ]; then
+  if [ "${DEVTOOLS_UNATTENDED:-0}" = 1 ]; then
     printf 'pr: not granted — delegation must authorize publication; otherwise report the hold without prompting\n'
   else
     printf 'pr:    not granted — the confirmation step asks the operator as written\n'
@@ -329,12 +337,13 @@ else
 fi
 
 section "preconditions"
+dt_require_gh_post || exit $?
 if git check-ignore --quiet "$DRAFT" 2>/dev/null; then
   printf '%s gitignored: yes\n' "$DRAFT"
 else
   printf '%s gitignored: NO — add it to .gitignore before drafting\n' "$DRAFT"
 fi
-if [ "${DT_UNATTENDED:-0}" = 1 ]; then
+if [ "${DEVTOOLS_UNATTENDED:-0}" = 1 ]; then
   lint_cmd=$(dt_repo_conf lint_pr_cmd 'mise run lint-pr-description')
   [ -n "$lint_cmd" ] || dt_die "lint_pr_cmd must not be empty"
   printf 'description lint: %s\n' "$lint_cmd"
@@ -357,7 +366,7 @@ elif [ "$gh_state" != ok ]; then
   printf '%s: present, %s line(s). Cannot tell whether it is stale because\n' \
     "$DRAFT" "$(wc -l <"$DRAFT" | tr -d ' ')"
   printf 'the pull request lookup did not run. Read it before overwriting.\n'
-elif [ -z "$open_number" ] && [ "${DT_UNATTENDED:-0}" = 1 ]; then
+elif [ -z "$open_number" ] && [ "${DEVTOOLS_UNATTENDED:-0}" = 1 ]; then
   printf '%s: present, unpublished draft preserved with its review bound\n' "$DRAFT"
 elif [ -z "$open_number" ]; then
   rm -f "$DRAFT"

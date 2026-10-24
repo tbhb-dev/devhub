@@ -11,6 +11,26 @@ from tools.gate_selector import changed_paths, select
 from tools.gate_timing import command
 
 
+def scenario_env(
+    ansible: Path, scenario: str, state: Path, image: str
+) -> dict[str, str]:
+    role, name = scenario.split("/", 1) if "/" in scenario else (scenario, "default")
+    return os.environ | {
+        "LC_ALL": "C.UTF-8",
+        "ANSIBLE_COLLECTIONS_PATH": str(ansible / ".collections"),
+        "ANSIBLE_ROLES_PATH": str(ansible / "roles"),
+        "no_proxy": "*",
+        "NO_PROXY": "*",
+        "MOLECULE_RUN_ID": state.name.removeprefix("molecule-"),
+        "MOLECULE_EPHEMERAL_DIRECTORY": f"{state}/{role}/{name}",
+        "MOLECULE_IMAGE": image,
+    }
+
+
+def molecule_argv(name: str) -> list[str]:
+    return ["uv", "run", "--group", "ops", "molecule", "test", "-s", name]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--all", action="store_true")
@@ -37,19 +57,10 @@ def main() -> None:
         for scenario in scenarios:
             role, name = scenario.split("/")
             image = ensure(ansible / "molecule/image", target=role)
-            env = os.environ | {
-                "LC_ALL": "C.UTF-8",
-                "ANSIBLE_COLLECTIONS_PATH": str(ansible / ".collections"),
-                "ANSIBLE_ROLES_PATH": str(ansible / "roles"),
-                "no_proxy": "*",
-                "NO_PROXY": "*",
-                "MOLECULE_RUN_ID": Path(state).name.removeprefix("molecule-"),
-                "MOLECULE_EPHEMERAL_DIRECTORY": f"{state}/{role}/{name}",
-                "MOLECULE_IMAGE": image,
-            }
+            env = scenario_env(ansible, scenario, Path(state), image)
             code = command(
                 scenario,
-                ["uv", "run", "--group", "ops", "molecule", "test", "-s", name],
+                molecule_argv(name),
                 timings,
                 cwd=ansible / "roles" / role,
                 env=env,

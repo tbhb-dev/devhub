@@ -9,9 +9,10 @@ lockfile = true
 idiomatic_version_file_enable_tools = []
 
 [tools]
-"go:github.com/tbhb-dev/devtools/cmd/guard-markdown" = "v0.14.0"
-"go:github.com/tbhb-dev/devtools/cmd/commit-lint" = "v0.14.0"
-"go:github.com/tbhb-dev/devtools/cmd/agentrepo" = "v0.14.0"
+"go:github.com/tbhb-dev/devtools/cmd/guard-markdown" = "v0.17.0"
+"go:github.com/tbhb-dev/devtools/cmd/commit-lint" = "v0.17.0"
+"go:github.com/tbhb-dev/devtools/cmd/gh-post" = "v0.17.0"
+"go:github.com/tbhb-dev/devtools/cmd/agentrepo" = "v0.17.0"
 # vendir can't come from the payload it delivers: bootstrap syncs before it installs.
 vendir = "0.46.2"
 apm = "0.33.0"

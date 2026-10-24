@@ -27,6 +27,7 @@ FAIL_RE = re.compile(r"^(?:fatal|failed|ERROR!|CRITICAL)\b")
 class RunRecord(TypedDict):
     run: int
     run_id: str
+    scenario: str
     status: str
     wall_seconds: float
     load_start: list[float]
@@ -37,6 +38,11 @@ class RunRecord(TypedDict):
 
 
 type Runner = Callable[[str, Path, Path], tuple[int, str]]
+
+
+def canonical_scenario(scenario: str) -> str:
+    role, name = scenario.split("/", 1) if "/" in scenario else (scenario, "default")
+    return f"{role}/{name}"
 
 
 def head_commit(root: Path) -> str:
@@ -74,7 +80,7 @@ def run_scenario(
     ensure_image: Callable[..., str] | None = None,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[int, str]:
-    role, name = scenario.split("/", 1) if "/" in scenario else (scenario, "default")
+    role, name = canonical_scenario(scenario).split("/", 1)
     ansible = root / "infra/ansible"
     image = (ensure_image or ensure)(ansible / "molecule/image", target=role)
     env = scenario_env(ansible, scenario, state, image)
@@ -93,13 +99,16 @@ def run_scenario(
     return result.returncode, output
 
 
-def load_existing(results: Path, commit: str, *, start_over: bool) -> list[RunRecord]:
+def load_existing(
+    results: Path, commit: str, scenario: str, *, start_over: bool
+) -> list[RunRecord]:
     if start_over:
         if results.exists():
             results.unlink()
         return []
     if not results.exists():
         return []
+    target_scenario = canonical_scenario(scenario)
     records: list[RunRecord] = []
     for raw in results.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -110,6 +119,12 @@ def load_existing(results: Path, commit: str, *, start_over: bool) -> list[RunRe
             msg = (
                 f"refusing to resume: results commit {item.get('commit')} "
                 f"differs from HEAD {commit}; pass --start-over to reset"
+            )
+            raise ValueError(msg)
+        if item.get("scenario") != target_scenario:
+            msg = (
+                f"refusing to resume: results scenario {item.get('scenario')} "
+                f"differs from requested {target_scenario}; pass --start-over to reset"
             )
             raise ValueError(msg)
         records.append(item)
@@ -130,8 +145,11 @@ class Soak:
     commit_fn: Callable[[Path], str] | None = None
 
     def run(self) -> list[RunRecord]:
+        scenario = canonical_scenario(self.scenario)
         commit = (self.commit_fn or head_commit)(self.root)
-        records = load_existing(self.results, commit, start_over=self.start_over)
+        records = load_existing(
+            self.results, commit, scenario, start_over=self.start_over
+        )
         self.results.parent.mkdir(parents=True, exist_ok=True)
         consecutive_failures = 0
         for item in reversed(records):
@@ -147,7 +165,7 @@ class Soak:
                 run_id = state_path.name.removeprefix("molecule-")
                 load_start = [float(value) for value in self.load_averages()]
                 started = self.clock()
-                returncode, output = self.runner(self.scenario, self.root, state_path)
+                returncode, output = self.runner(scenario, self.root, state_path)
                 wall_seconds = round(self.clock() - started, 6)
                 load_finish = [float(value) for value in self.load_averages()]
             if returncode == 0:
@@ -162,6 +180,7 @@ class Soak:
             record: RunRecord = {
                 "run": run_number,
                 "run_id": run_id,
+                "scenario": scenario,
                 "status": status,
                 "wall_seconds": wall_seconds,
                 "load_start": load_start,

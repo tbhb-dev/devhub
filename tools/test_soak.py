@@ -76,6 +76,7 @@ def test_ac1_records_each_run_on_completion(tmp_path: Path) -> None:
     assert records[0] == {
         "run": 1,
         "run_id": observed_states[0].name.removeprefix("molecule-"),
+        "scenario": "actions_runner_pool/default",
         "status": "pass",
         "wall_seconds": 12.5,
         "load_start": [0.5, 0.4, 0.3],
@@ -87,6 +88,7 @@ def test_ac1_records_each_run_on_completion(tmp_path: Path) -> None:
     assert records[1] == {
         "run": 2,
         "run_id": observed_states[1].name.removeprefix("molecule-"),
+        "scenario": "actions_runner_pool/default",
         "status": "fail",
         "wall_seconds": 45.25,
         "load_start": [1.5, 1.0, 0.7],
@@ -348,3 +350,149 @@ def test_risks_commit_hash_guard_refuses_and_start_over_resets(
         json.loads(line) for line in results.read_text(encoding="utf-8").splitlines()
     ]
     assert disk_records == reset_records
+
+
+def test_scenario_guard_rejects_completed_file_with_different_scenario(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "soak.jsonl"
+    soak.Soak(
+        scenario="ops_ssh/default",
+        count=2,
+        results=results,
+        runner=lambda _s, _r, _state: (0, ""),
+        root=tmp_path,
+        load_averages=lambda: (0.1, 0.1, 0.1),
+        clock=lambda: 1.0,
+        commit_fn=lambda _: "same-commit",
+    ).run()
+    before = results.read_text(encoding="utf-8")
+
+    second_calls = 0
+
+    def unexpected_runner(_scenario: str, _root: Path, _state: Path) -> tuple[int, str]:
+        nonlocal second_calls
+        second_calls += 1
+        return 0, ""
+
+    with pytest.raises(
+        ValueError,
+        match=r"ops_ssh/default.*docker_rootless/default.*--start-over",
+    ):
+        soak.Soak(
+            scenario="docker_rootless/default",
+            count=2,
+            results=results,
+            runner=unexpected_runner,
+            root=tmp_path,
+            load_averages=lambda: (0.1, 0.1, 0.1),
+            clock=lambda: 2.0,
+            commit_fn=lambda _: "same-commit",
+        ).run()
+
+    assert second_calls == 0
+    assert results.read_text(encoding="utf-8") == before
+
+
+def test_scenario_guard_rejects_partial_file_and_start_over_resets(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "soak.jsonl"
+    soak.Soak(
+        scenario="ops_ssh",
+        count=1,
+        results=results,
+        runner=lambda _s, _r, _state: (0, ""),
+        root=tmp_path,
+        load_averages=lambda: (0.1, 0.1, 0.1),
+        clock=lambda: 1.0,
+        commit_fn=lambda _: "same-commit",
+    ).run()
+    before = results.read_text(encoding="utf-8")
+
+    second_calls = 0
+
+    def unexpected_runner(_scenario: str, _root: Path, _state: Path) -> tuple[int, str]:
+        nonlocal second_calls
+        second_calls += 1
+        return 0, ""
+
+    with pytest.raises(
+        ValueError,
+        match=r"ops_ssh/default.*docker_rootless/default.*--start-over",
+    ):
+        soak.Soak(
+            scenario="docker_rootless/default",
+            count=2,
+            results=results,
+            runner=unexpected_runner,
+            root=tmp_path,
+            load_averages=lambda: (0.1, 0.1, 0.1),
+            clock=lambda: 2.0,
+            commit_fn=lambda _: "same-commit",
+        ).run()
+
+    assert second_calls == 0
+    assert results.read_text(encoding="utf-8") == before
+
+    reset_records = soak.Soak(
+        scenario="docker_rootless",
+        count=2,
+        results=results,
+        start_over=True,
+        runner=lambda _s, _r, _state: (0, ""),
+        root=tmp_path,
+        load_averages=lambda: (0.2, 0.2, 0.2),
+        clock=lambda: 3.0,
+        commit_fn=lambda _: "same-commit",
+    ).run()
+    assert [item["run"] for item in reset_records] == [1, 2]
+    assert {item["scenario"] for item in reset_records} == {"docker_rootless/default"}
+
+
+def test_resume_at_failure_threshold_stops_without_runner_call(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "soak.jsonl"
+    initial_calls = 0
+
+    def failing_runner(_scenario: str, _root: Path, _state: Path) -> tuple[int, str]:
+        nonlocal initial_calls
+        initial_calls += 1
+        return 1, "TASK [t] ***\nfatal: [edge-1]: FAILED! => {}\n"
+
+    initial = soak.Soak(
+        scenario="ops_ssh",
+        count=5,
+        results=results,
+        max_failures=3,
+        runner=failing_runner,
+        root=tmp_path,
+        load_averages=lambda: (0.1, 0.1, 0.1),
+        clock=lambda: 1.0,
+        commit_fn=lambda _: "same-commit",
+    ).run()
+    assert initial_calls == 3
+    assert len(initial) == 3
+
+    resumed_calls = 0
+
+    def unexpected_runner(_scenario: str, _root: Path, _state: Path) -> tuple[int, str]:
+        nonlocal resumed_calls
+        resumed_calls += 1
+        return 0, ""
+
+    resumed = soak.Soak(
+        scenario="ops_ssh/default",
+        count=5,
+        results=results,
+        max_failures=3,
+        runner=unexpected_runner,
+        root=tmp_path,
+        load_averages=lambda: (0.1, 0.1, 0.1),
+        clock=lambda: 2.0,
+        commit_fn=lambda _: "same-commit",
+    ).run()
+    assert resumed_calls == 0
+    assert [item["run"] for item in resumed] == [1, 2, 3]
+    assert {item["scenario"] for item in resumed} == {"ops_ssh/default"}

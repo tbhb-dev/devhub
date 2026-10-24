@@ -623,6 +623,12 @@ run = [
   "uv run --group ops python -m tools.gate_molecule",
 ]
 
+[tasks.soak]
+description = "Run one Molecule scenario repeatedly and write per-run JSONL results"
+depends = ["install-ansible"]
+env = { LC_ALL = "C.UTF-8" }
+run = "uv run --group ops python -m tools.soak"
+
 [tasks.check-commit]
 description = "Run lint, syntax checks, unit checks and affected Molecule scenarios"
 run = ["mise run lint", "mise run test"]

@@ -623,6 +623,11 @@ run = [
   "uv run --group ops python -m tools.gate_molecule",
 ]
 
+[tasks.relay-diag]
+description = "Record read-only Docker call timings and relay state as JSONL"
+env = { LC_ALL = "C.UTF-8" }
+run = "uv run --group ops python -m tools.relay_diag"
+
 [tasks.check-commit]
 description = "Run lint, syntax checks, unit checks and affected Molecule scenarios"
 run = ["mise run lint", "mise run test"]

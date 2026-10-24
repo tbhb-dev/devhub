@@ -126,6 +126,7 @@ fsprogs
 functrace
 genpkey
 getent
+getloadavg
 ghrunner
 isdir
 islnk
